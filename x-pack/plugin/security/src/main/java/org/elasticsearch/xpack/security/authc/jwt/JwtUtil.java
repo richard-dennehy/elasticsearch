@@ -14,13 +14,23 @@ import com.nimbusds.jose.util.Base64URL;
 import com.nimbusds.jwt.JWT;
 import com.nimbusds.jwt.SignedJWT;
 
+import io.netty.util.Timeout;
+
+import org.apache.hc.client5.http.async.methods.SimpleHttpRequest;
+import org.apache.hc.client5.http.async.methods.SimpleHttpResponse;
+import org.apache.hc.client5.http.config.ConnectionConfig;
+import org.apache.hc.client5.http.impl.nio.PoolingAsyncClientConnectionManager;
+import org.apache.hc.client5.http.impl.nio.PoolingAsyncClientConnectionManagerBuilder;
+import org.apache.hc.client5.http.ssl.ClientTlsStrategyBuilder;
+import org.apache.hc.client5.http.ssl.TlsSocketStrategy;
+import org.apache.hc.core5.concurrent.FutureCallback;
+import org.apache.hc.core5.http.Method;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpHost;
 import org.apache.http.HttpResponse;
 import org.apache.http.StatusLine;
 import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.methods.HttpGet;
-import org.apache.http.concurrent.FutureCallback;
 import org.apache.http.config.Registry;
 import org.apache.http.config.RegistryBuilder;
 import org.apache.http.impl.nio.client.CloseableHttpAsyncClient;
@@ -32,6 +42,10 @@ import org.apache.http.nio.conn.NoopIOSessionStrategy;
 import org.apache.http.nio.conn.SchemeIOSessionStrategy;
 import org.apache.http.nio.conn.ssl.SSLIOSessionStrategy;
 import org.apache.http.nio.reactor.ConnectingIOReactor;
+import org.apache.http.nio.reactor.IOSession;
+import org.apache.http.nio.reactor.ssl.SSLIOSession;
+import org.apache.http.nio.reactor.ssl.SSLMode;
+import org.apache.http.nio.reactor.ssl.SSLSetupHandler;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.elasticsearch.ElasticsearchException;
@@ -71,10 +85,14 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
 import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLException;
+import javax.net.ssl.SSLSession;
 
 import static org.elasticsearch.xpack.core.security.authc.jwt.JwtRealmSettings.HTTP_PROXY_HOST;
 import static org.elasticsearch.xpack.core.security.authc.jwt.JwtRealmSettings.HTTP_PROXY_PORT;
@@ -212,7 +230,7 @@ public class JwtUtil {
     public static void readUriContents(
         final String jwkSetConfigKeyPkc,
         final URI jwkSetPathPkcUri,
-        final CloseableHttpAsyncClient httpClient,
+        final org.apache.hc.client5.http.impl.async.CloseableHttpAsyncClient httpClient,
         final ActionListener<byte[]> listener
     ) {
         JwtUtil.readBytes(
@@ -267,42 +285,47 @@ public class JwtUtil {
      * @param sslService Realm config for SSL.
      * @return Initialized HTTPS client.
      */
-    public static CloseableHttpAsyncClient createHttpClient(final RealmConfig realmConfig, final SSLService sslService) {
+    public static org.apache.hc.client5.http.impl.async.CloseableHttpAsyncClient createHttpClient(final RealmConfig realmConfig, final SSLService sslService) {
         try {
             SpecialPermission.check();
-            return AccessController.doPrivileged((PrivilegedExceptionAction<CloseableHttpAsyncClient>) () -> {
-                final ConnectingIOReactor ioReactor = new DefaultConnectingIOReactor();
+            return AccessController.doPrivileged((PrivilegedExceptionAction<org.apache.hc.client5.http.impl.async.CloseableHttpAsyncClient>) () -> {
                 final String sslKey = RealmSettings.realmSslPrefix(realmConfig.identifier());
                 final SslConfiguration sslConfiguration = sslService.getSSLConfiguration(sslKey);
                 final SSLContext clientContext = sslService.sslContext(sslConfiguration);
                 final HostnameVerifier verifier = SSLService.getHostnameVerifier(sslConfiguration);
-                final Registry<SchemeIOSessionStrategy> registry = RegistryBuilder.<SchemeIOSessionStrategy>create()
-                    .register("http", NoopIOSessionStrategy.INSTANCE)
-                    .register("https", new SSLIOSessionStrategy(clientContext, verifier))
+                final org.apache.hc.core5.http.nio.ssl.TlsStrategy tlsStrategy = ClientTlsStrategyBuilder.create()
+                    .setSslContext(clientContext)
+                    .setHostnameVerifier(verifier)
                     .build();
-                final PoolingNHttpClientConnectionManager connectionManager = new PoolingNHttpClientConnectionManager(ioReactor, registry);
+                final var connectionManager = PoolingAsyncClientConnectionManagerBuilder
+                    .create()
+                    .setTlsStrategy(tlsStrategy)
+                    .setDefaultConnectionConfig(ConnectionConfig.custom()
+                        .setConnectTimeout(Math.toIntExact(realmConfig.getSetting(JwtRealmSettings.HTTP_CONNECT_TIMEOUT).getMillis()), TimeUnit.MILLISECONDS)
+                        .setSocketTimeout(Math.toIntExact(realmConfig.getSetting(JwtRealmSettings.HTTP_SOCKET_TIMEOUT).getMillis()), TimeUnit.MILLISECONDS)
+                        .build()
+                    )
+                    .build();
                 connectionManager.setDefaultMaxPerRoute(realmConfig.getSetting(JwtRealmSettings.HTTP_MAX_ENDPOINT_CONNECTIONS));
                 connectionManager.setMaxTotal(realmConfig.getSetting(JwtRealmSettings.HTTP_MAX_CONNECTIONS));
-                final RequestConfig requestConfig = RequestConfig.custom()
-                    .setConnectTimeout(Math.toIntExact(realmConfig.getSetting(JwtRealmSettings.HTTP_CONNECT_TIMEOUT).getMillis()))
+                final var requestConfig = org.apache.hc.client5.http.config.RequestConfig.custom()
                     .setConnectionRequestTimeout(
-                        Math.toIntExact(realmConfig.getSetting(JwtRealmSettings.HTTP_CONNECTION_READ_TIMEOUT).getMillis())
+                        Math.toIntExact(realmConfig.getSetting(JwtRealmSettings.HTTP_CONNECTION_READ_TIMEOUT).getMillis()), TimeUnit.MILLISECONDS
                     )
-                    .setSocketTimeout(Math.toIntExact(realmConfig.getSetting(JwtRealmSettings.HTTP_SOCKET_TIMEOUT).getMillis()))
                     .build();
-                final HttpAsyncClientBuilder httpAsyncClientBuilder = HttpAsyncClients.custom()
+                final var httpAsyncClientBuilder = org.apache.hc.client5.http.impl.async.HttpAsyncClients.custom()
                     .setConnectionManager(connectionManager)
                     .setDefaultRequestConfig(requestConfig);
                 if (realmConfig.hasSetting(HTTP_PROXY_HOST)) {
                     httpAsyncClientBuilder.setProxy(
-                        new HttpHost(
+                        new org.apache.hc.core5.http.HttpHost(
+                            realmConfig.getSetting(HTTP_PROXY_SCHEME),
                             realmConfig.getSetting(HTTP_PROXY_HOST),
-                            realmConfig.getSetting(HTTP_PROXY_PORT),
-                            realmConfig.getSetting(HTTP_PROXY_SCHEME)
+                            realmConfig.getSetting(HTTP_PROXY_PORT)
                         )
                     );
                 }
-                final CloseableHttpAsyncClient httpAsyncClient = httpAsyncClientBuilder.build();
+                final var httpAsyncClient = httpAsyncClientBuilder.build();
                 httpAsyncClient.start();
                 return httpAsyncClient;
             });
@@ -316,20 +339,16 @@ public class JwtUtil {
      * @param httpClient Configured HTTP/HTTPS client.
      * @param uri URI to download.
      */
-    public static void readBytes(final CloseableHttpAsyncClient httpClient, final URI uri, ActionListener<byte[]> listener) {
+    public static void readBytes(final org.apache.hc.client5.http.impl.async.CloseableHttpAsyncClient httpClient, final URI uri, ActionListener<byte[]> listener) {
         AccessController.doPrivileged((PrivilegedAction<Void>) () -> {
-            httpClient.execute(new HttpGet(uri), new FutureCallback<>() {
+            httpClient.execute(new SimpleHttpRequest(Method.GET, uri), new FutureCallback<>() {
                 @Override
-                public void completed(final HttpResponse result) {
-                    final StatusLine statusLine = result.getStatusLine();
+                public void completed(final SimpleHttpResponse result) {
+                    final var statusLine = new org.apache.hc.core5.http.message.StatusLine(result);
                     final int statusCode = statusLine.getStatusCode();
                     if (statusCode == 200) {
-                        final HttpEntity entity = result.getEntity();
-                        try (InputStream inputStream = entity.getContent()) {
-                            listener.onResponse(inputStream.readAllBytes());
-                        } catch (Exception e) {
-                            listener.onFailure(e);
-                        }
+                        final var entity = result.getBody();
+                        listener.onResponse(entity.getBodyBytes());
                     } else {
                         listener.onFailure(
                             new ElasticsearchSecurityException(

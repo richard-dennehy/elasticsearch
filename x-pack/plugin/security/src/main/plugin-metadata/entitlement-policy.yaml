@@ -58,3 +58,6 @@ org.opensaml.saml.impl:
       basedir_if_relative: config
       mode: read
       exclusive: true
+org.apache.httpcomponents.core5.httpcore5:
+  - manage_threads
+  - outbound_network

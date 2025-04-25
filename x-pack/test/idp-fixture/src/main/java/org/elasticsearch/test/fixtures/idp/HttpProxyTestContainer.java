@@ -27,6 +27,8 @@ public final class HttpProxyTestContainer extends DockerEnvironmentAwareTestCont
         super(
             new ImageFromDockerfile("es-http-proxy-fixture").withFileFromClasspath("Dockerfile", "nginx/Dockerfile")
                 .withFileFromClasspath("nginx/nginx.conf", "/nginx/nginx.conf")
+                .withFileFromClasspath("nginx/testnode_ec.cert.pem", "/nginx/testnode_ec.cert.pem")
+                .withFileFromClasspath("nginx/testnode_ec.key.pem", "/nginx/testnode_ec.key.pem")
         );
         addExposedPorts(PORT, TLS_PORT);
         withNetwork(network);

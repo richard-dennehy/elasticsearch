@@ -26,6 +26,8 @@ RUN set -x \
     && apt-get remove --purge --auto-remove -y && rm -rf /var/lib/apt/lists/*
 
 COPY ./nginx/nginx.conf /etc/nginx/nginx.conf
+COPY ./nginx/testnode_ec.cert.pem /etc/certs/testnode_ec.cert.pem
+COPY ./nginx/testnode_ec.key.pem  /etc/certs/testnode_ec.key.pem
 
 ENTRYPOINT ["/docker-entrypoint.sh"]
 
