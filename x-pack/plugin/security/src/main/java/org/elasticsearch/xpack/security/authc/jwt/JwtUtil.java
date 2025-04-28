@@ -14,40 +14,18 @@ import com.nimbusds.jose.util.Base64URL;
 import com.nimbusds.jwt.JWT;
 import com.nimbusds.jwt.SignedJWT;
 
-import io.netty.util.Timeout;
-
-import org.apache.hc.client5.http.async.methods.SimpleHttpRequest;
-import org.apache.hc.client5.http.async.methods.SimpleHttpResponse;
-import org.apache.hc.client5.http.config.ConnectionConfig;
-import org.apache.hc.client5.http.impl.nio.PoolingAsyncClientConnectionManager;
-import org.apache.hc.client5.http.impl.nio.PoolingAsyncClientConnectionManagerBuilder;
-import org.apache.hc.client5.http.ssl.ClientTlsStrategyBuilder;
-import org.apache.hc.client5.http.ssl.TlsSocketStrategy;
-import org.apache.hc.core5.concurrent.FutureCallback;
-import org.apache.hc.core5.http.Method;
-import org.apache.http.HttpEntity;
-import org.apache.http.HttpHost;
-import org.apache.http.HttpResponse;
-import org.apache.http.StatusLine;
-import org.apache.http.client.config.RequestConfig;
-import org.apache.http.client.methods.HttpGet;
-import org.apache.http.config.Registry;
-import org.apache.http.config.RegistryBuilder;
 import org.apache.http.impl.nio.client.CloseableHttpAsyncClient;
-import org.apache.http.impl.nio.client.HttpAsyncClientBuilder;
-import org.apache.http.impl.nio.client.HttpAsyncClients;
 import org.apache.http.impl.nio.conn.PoolingNHttpClientConnectionManager;
-import org.apache.http.impl.nio.reactor.DefaultConnectingIOReactor;
-import org.apache.http.nio.conn.NoopIOSessionStrategy;
-import org.apache.http.nio.conn.SchemeIOSessionStrategy;
-import org.apache.http.nio.conn.ssl.SSLIOSessionStrategy;
-import org.apache.http.nio.reactor.ConnectingIOReactor;
-import org.apache.http.nio.reactor.IOSession;
-import org.apache.http.nio.reactor.ssl.SSLIOSession;
-import org.apache.http.nio.reactor.ssl.SSLMode;
-import org.apache.http.nio.reactor.ssl.SSLSetupHandler;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.eclipse.jetty.client.HttpClient;
+import org.eclipse.jetty.client.HttpProxy;
+import org.eclipse.jetty.client.InputStreamResponseListener;
+import org.eclipse.jetty.client.MultiplexConnectionPool;
+import org.eclipse.jetty.client.Origin;
+import org.eclipse.jetty.client.transport.HttpClientTransportDynamic;
+import org.eclipse.jetty.io.ClientConnector;
+import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.ElasticsearchSecurityException;
 import org.elasticsearch.SpecialPermission;
@@ -69,7 +47,6 @@ import org.elasticsearch.xpack.core.security.authc.jwt.JwtRealmSettings;
 import org.elasticsearch.xpack.core.ssl.SSLService;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -80,6 +57,7 @@ import java.security.PrivilegedAction;
 import java.security.PrivilegedActionException;
 import java.security.PrivilegedExceptionAction;
 import java.text.ParseException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -90,9 +68,6 @@ import java.util.function.Supplier;
 
 import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLEngine;
-import javax.net.ssl.SSLException;
-import javax.net.ssl.SSLSession;
 
 import static org.elasticsearch.xpack.core.security.authc.jwt.JwtRealmSettings.HTTP_PROXY_HOST;
 import static org.elasticsearch.xpack.core.security.authc.jwt.JwtRealmSettings.HTTP_PROXY_PORT;
@@ -230,7 +205,7 @@ public class JwtUtil {
     public static void readUriContents(
         final String jwkSetConfigKeyPkc,
         final URI jwkSetPathPkcUri,
-        final org.apache.hc.client5.http.impl.async.CloseableHttpAsyncClient httpClient,
+        final HttpClient httpClient,
         final ActionListener<byte[]> listener
     ) {
         JwtUtil.readBytes(
@@ -280,52 +255,54 @@ public class JwtUtil {
     }
 
     /**
-     * Creates a {@link CloseableHttpAsyncClient} that uses a {@link PoolingNHttpClientConnectionManager}
+     * Creates a {@link HttpClient} respecting the settings in {@link RealmConfig}
      * @param realmConfig Realm config for a JWT realm.
      * @param sslService Realm config for SSL.
      * @return Initialized HTTPS client.
      */
-    public static org.apache.hc.client5.http.impl.async.CloseableHttpAsyncClient createHttpClient(final RealmConfig realmConfig, final SSLService sslService) {
+    public static HttpClient createHttpClient(final RealmConfig realmConfig, final SSLService sslService) {
         try {
             SpecialPermission.check();
-            return AccessController.doPrivileged((PrivilegedExceptionAction<org.apache.hc.client5.http.impl.async.CloseableHttpAsyncClient>) () -> {
+            return AccessController.doPrivileged((PrivilegedExceptionAction<HttpClient>) () -> {
                 final String sslKey = RealmSettings.realmSslPrefix(realmConfig.identifier());
                 final SslConfiguration sslConfiguration = sslService.getSSLConfiguration(sslKey);
                 final SSLContext clientContext = sslService.sslContext(sslConfiguration);
                 final HostnameVerifier verifier = SSLService.getHostnameVerifier(sslConfiguration);
-                final org.apache.hc.core5.http.nio.ssl.TlsStrategy tlsStrategy = ClientTlsStrategyBuilder.create()
-                    .setSslContext(clientContext)
-                    .setHostnameVerifier(verifier)
-                    .build();
-                final var connectionManager = PoolingAsyncClientConnectionManagerBuilder
-                    .create()
-                    .setTlsStrategy(tlsStrategy)
-                    .setDefaultConnectionConfig(ConnectionConfig.custom()
-                        .setConnectTimeout(Math.toIntExact(realmConfig.getSetting(JwtRealmSettings.HTTP_CONNECT_TIMEOUT).getMillis()), TimeUnit.MILLISECONDS)
-                        .setSocketTimeout(Math.toIntExact(realmConfig.getSetting(JwtRealmSettings.HTTP_SOCKET_TIMEOUT).getMillis()), TimeUnit.MILLISECONDS)
-                        .build()
+                final var sslContextFactory = new SslContextFactory.Client();
+                sslContextFactory.setHostnameVerifier(verifier);
+                sslContextFactory.setSslContext(clientContext);
+
+                final var clientConnector = new ClientConnector();
+                clientConnector.setSslContextFactory(sslContextFactory);
+                clientConnector.setConnectTimeout(
+                    Duration.ofMillis(Math.toIntExact(realmConfig.getSetting(JwtRealmSettings.HTTP_CONNECT_TIMEOUT).getMillis()))
+                );
+                clientConnector.setIdleTimeout(
+                    Duration.ofMillis(Math.toIntExact(realmConfig.getSetting(JwtRealmSettings.HTTP_SOCKET_TIMEOUT).getMillis()))
+                );
+                // NOTE missing HTTP_CONNECTION_READ_TIMEOUT handling - not clear what this is meant to control, or if Jetty exposes this
+
+                final var transport = new HttpClientTransportDynamic(clientConnector);
+                transport.setConnectionPoolFactory(
+                    destination -> new MultiplexConnectionPool(
+                        destination,
+                        realmConfig.getSetting(JwtRealmSettings.HTTP_MAX_CONNECTIONS),
+                        realmConfig.getSetting(JwtRealmSettings.HTTP_MAX_ENDPOINT_CONNECTIONS)
                     )
-                    .build();
-                connectionManager.setDefaultMaxPerRoute(realmConfig.getSetting(JwtRealmSettings.HTTP_MAX_ENDPOINT_CONNECTIONS));
-                connectionManager.setMaxTotal(realmConfig.getSetting(JwtRealmSettings.HTTP_MAX_CONNECTIONS));
-                final var requestConfig = org.apache.hc.client5.http.config.RequestConfig.custom()
-                    .setConnectionRequestTimeout(
-                        Math.toIntExact(realmConfig.getSetting(JwtRealmSettings.HTTP_CONNECTION_READ_TIMEOUT).getMillis()), TimeUnit.MILLISECONDS
-                    )
-                    .build();
-                final var httpAsyncClientBuilder = org.apache.hc.client5.http.impl.async.HttpAsyncClients.custom()
-                    .setConnectionManager(connectionManager)
-                    .setDefaultRequestConfig(requestConfig);
+                );
+
+                final var httpAsyncClient = new HttpClient(transport);
+
                 if (realmConfig.hasSetting(HTTP_PROXY_HOST)) {
-                    httpAsyncClientBuilder.setProxy(
-                        new org.apache.hc.core5.http.HttpHost(
-                            realmConfig.getSetting(HTTP_PROXY_SCHEME),
-                            realmConfig.getSetting(HTTP_PROXY_HOST),
-                            realmConfig.getSetting(HTTP_PROXY_PORT)
-                        )
-                    );
+                    httpAsyncClient.getProxyConfiguration()
+                        .addProxy(
+                            new HttpProxy(
+                                new Origin.Address(realmConfig.getSetting(HTTP_PROXY_HOST), realmConfig.getSetting(HTTP_PROXY_PORT)),
+                                realmConfig.getSetting(HTTP_PROXY_SCHEME).equals("https")
+                            )
+                        );
                 }
-                final var httpAsyncClient = httpAsyncClientBuilder.build();
+
                 httpAsyncClient.start();
                 return httpAsyncClient;
             });
@@ -339,35 +316,34 @@ public class JwtUtil {
      * @param httpClient Configured HTTP/HTTPS client.
      * @param uri URI to download.
      */
-    public static void readBytes(final org.apache.hc.client5.http.impl.async.CloseableHttpAsyncClient httpClient, final URI uri, ActionListener<byte[]> listener) {
+    public static void readBytes(final HttpClient httpClient, final URI uri, ActionListener<byte[]> listener) {
         AccessController.doPrivileged((PrivilegedAction<Void>) () -> {
-            httpClient.execute(new SimpleHttpRequest(Method.GET, uri), new FutureCallback<>() {
-                @Override
-                public void completed(final SimpleHttpResponse result) {
-                    final var statusLine = new org.apache.hc.core5.http.message.StatusLine(result);
-                    final int statusCode = statusLine.getStatusCode();
-                    if (statusCode == 200) {
-                        final var entity = result.getBody();
-                        listener.onResponse(entity.getBodyBytes());
-                    } else {
-                        listener.onFailure(
-                            new ElasticsearchSecurityException(
-                                "Get [" + uri + "] failed, status [" + statusCode + "], reason [" + statusLine.getReasonPhrase() + "]."
-                            )
-                        );
+            try {
+                // NOTE this is async non-buffering; see https://jetty.org/docs/jetty/12/programming-guide/client/http.html#content-response
+                var responseListener = new InputStreamResponseListener();
+                httpClient.newRequest(uri).send(responseListener);
+
+                // NOTE this is the timeout for receiving response headers, rather than the response body - it's not clear what this timeout should be set to
+                var response = responseListener.get(5, TimeUnit.SECONDS);
+                var statusCode = response.getStatus();
+
+                if (statusCode == 200) {
+                    try (var responseContent = responseListener.getInputStream()) {
+                        listener.onResponse(responseContent.readAllBytes());
+                    } catch (Exception e) {
+                        listener.onFailure(e);
                     }
+                } else {
+                    listener.onFailure(
+                        new ElasticsearchSecurityException(
+                            "Get [" + uri + "] failed, status [" + statusCode + "], reason [" + response.getReason() + "]."
+                        )
+                    );
                 }
+            } catch (Exception e) {
+                listener.onFailure(new ElasticsearchSecurityException("Get [" + uri + "] failed.", e));
+            }
 
-                @Override
-                public void failed(Exception e) {
-                    listener.onFailure(new ElasticsearchSecurityException("Get [" + uri + "] failed.", e));
-                }
-
-                @Override
-                public void cancelled() {
-                    listener.onFailure(new ElasticsearchSecurityException("Get [" + uri + "] was cancelled."));
-                }
-            });
             return null;
         });
     }

@@ -58,6 +58,10 @@ org.opensaml.saml.impl:
       basedir_if_relative: config
       mode: read
       exclusive: true
-org.apache.httpcomponents.core5.httpcore5:
+org.eclipse.jetty.util:
   - manage_threads
+  - write_system_properties:
+      properties:
+        - jetty.git.hash
+org.eclipse.jetty.io:
   - outbound_network

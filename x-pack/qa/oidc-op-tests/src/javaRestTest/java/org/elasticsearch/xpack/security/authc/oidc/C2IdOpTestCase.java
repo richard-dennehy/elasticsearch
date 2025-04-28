@@ -172,7 +172,7 @@ public abstract class C2IdOpTestCase extends ESRestTestCase {
         .setting("xpack.security.authc.realms.jwt.op-jwt-proxy.claims.principal", "sub")
         .setting("xpack.security.authc.realms.jwt.op-jwt-proxy.claims.groups", "groups")
         .setting("xpack.security.authc.realms.jwt.op-jwt-proxy.client_authentication.type", "shared_secret")
-        .setting("xpack.security.authc.realms.jwt.op-jwt-proxy.http.proxy.scheme", "https")
+        .setting("xpack.security.authc.realms.jwt.op-jwt-proxy.http.proxy.scheme", "http")
         .setting("xpack.security.authc.realms.jwt.op-jwt-proxy.http.proxy.host", "localhost")
         .setting("xpack.security.authc.realms.jwt.op-jwt-proxy.http.proxy.port", () -> proxy.getTlsPort().toString())
         .setting("xpack.security.authc.realms.jwt.op-jwt-proxy.ssl.keystore.path", "testnode.jks")

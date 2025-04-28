@@ -68,9 +68,11 @@ dependencies {
   runtimeOnly "org.slf4j:slf4j-nop:${versions.slf4j}" // workaround for https://github.com/elastic/elasticsearch/issues/93714
  // api "org.apache.logging.log4j:log4j-slf4j-impl:${versions.log4j}"  see above
 
-  api "org.apache.httpcomponents.client5:httpclient5:5.4.4"
-  api "org.apache.httpcomponents.core5:httpcore5:5.3.4"
-  api "org.apache.httpcomponents.core5:httpcore5-h2:5.3.4"
+  api "org.eclipse.jetty:jetty-client:12.0.9"
+  api "org.eclipse.jetty:jetty-http:12.0.9"
+  api "org.eclipse.jetty:jetty-io:12.0.9"
+  api "org.eclipse.jetty:jetty-util:12.0.9"
+  api "org.eclipse.jetty:jetty-alpn-client:12.0.9"
   api "org.apache.httpcomponents:httpclient:${versions.httpclient}"
   api "org.apache.httpcomponents:httpcore:${versions.httpcore}"
   api "org.apache.httpcomponents:httpasyncclient:${versions.httpasyncclient}"

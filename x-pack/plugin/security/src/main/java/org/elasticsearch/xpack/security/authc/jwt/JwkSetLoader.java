@@ -9,9 +9,9 @@ package org.elasticsearch.xpack.security.authc.jwt;
 
 import com.nimbusds.jose.jwk.JWK;
 
-import org.apache.hc.client5.http.impl.async.CloseableHttpAsyncClient;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.eclipse.jetty.client.HttpClient;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.common.Strings;
@@ -24,7 +24,6 @@ import org.elasticsearch.xpack.core.security.authc.RealmSettings;
 import org.elasticsearch.xpack.core.security.authc.jwt.JwtRealmSettings;
 import org.elasticsearch.xpack.core.ssl.SSLService;
 
-import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -50,7 +49,7 @@ public class JwkSetLoader implements Releasable {
     @Nullable
     private final URI jwkSetPathUri;
     @Nullable
-    private final CloseableHttpAsyncClient httpClient;
+    private final HttpClient httpClient;
     private volatile ContentAndJwksAlgs contentAndJwksAlgs = new ContentAndJwksAlgs(
         new byte[32],
         new JwksAlgs(Collections.emptyList(), Collections.emptyList())
@@ -179,8 +178,8 @@ public class JwkSetLoader implements Releasable {
     public void close() {
         if (httpClient != null) {
             try {
-                httpClient.close();
-            } catch (IOException e) {
+                httpClient.stop();
+            } catch (Exception e) {
                 logger.warn(() -> "Exception closing HTTPS client for realm [" + realmConfig.name() + "]", e);
             }
         }
