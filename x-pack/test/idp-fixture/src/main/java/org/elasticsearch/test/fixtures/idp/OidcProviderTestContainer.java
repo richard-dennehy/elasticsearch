@@ -60,11 +60,15 @@ public final class OidcProviderTestContainer extends DockerEnvironmentAwareTestC
         return "http://127.0.0.1:" + getMappedPort(PORT);
     }
 
+    public String getC2OPSslUrl() {
+        return "https://127.0.0.1:" + getMappedPort(SSL_PORT);
+    }
+
     public String getC2IssuerUrl() {
         return getC2OPUrl() + "/c2id";
     }
 
-    public String getC2IDSslUrl() {
-        return "https://127.0.0.1:" + getMappedPort(SSL_PORT) + "/c2id";
+    public String getC2IssuerSslUrl() {
+        return getC2OPSslUrl() + "/c2id";
     }
 }

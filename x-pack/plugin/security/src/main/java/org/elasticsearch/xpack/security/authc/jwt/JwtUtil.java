@@ -18,11 +18,13 @@ import org.apache.http.impl.nio.client.CloseableHttpAsyncClient;
 import org.apache.http.impl.nio.conn.PoolingNHttpClientConnectionManager;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.eclipse.jetty.client.BufferingResponseListener;
 import org.eclipse.jetty.client.HttpClient;
 import org.eclipse.jetty.client.HttpProxy;
 import org.eclipse.jetty.client.InputStreamResponseListener;
 import org.eclipse.jetty.client.MultiplexConnectionPool;
 import org.eclipse.jetty.client.Origin;
+import org.eclipse.jetty.client.Result;
 import org.eclipse.jetty.client.transport.HttpClientTransportDynamic;
 import org.eclipse.jetty.io.ClientConnector;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
@@ -280,7 +282,8 @@ public class JwtUtil {
                 clientConnector.setIdleTimeout(
                     Duration.ofMillis(Math.toIntExact(realmConfig.getSetting(JwtRealmSettings.HTTP_SOCKET_TIMEOUT).getMillis()))
                 );
-                // NOTE missing HTTP_CONNECTION_READ_TIMEOUT handling - not clear what this is meant to control, or if Jetty exposes this
+                // NOTE missing HTTP_CONNECTION_READ_TIMEOUT handling
+                //  - this appears to set the max time to wait for a connection to become available from the pool - doesn't seem like Jetty exposes similar functionality
 
                 final var transport = new HttpClientTransportDynamic(clientConnector);
                 transport.setConnectionPoolFactory(
@@ -319,27 +322,27 @@ public class JwtUtil {
     public static void readBytes(final HttpClient httpClient, final URI uri, ActionListener<byte[]> listener) {
         AccessController.doPrivileged((PrivilegedAction<Void>) () -> {
             try {
-                // NOTE this is async non-buffering; see https://jetty.org/docs/jetty/12/programming-guide/client/http.html#content-response
-                var responseListener = new InputStreamResponseListener();
-                httpClient.newRequest(uri).send(responseListener);
+                var responseListener = new BufferingResponseListener(4 * 1024 * 1024) {
+                    @Override
+                    public void onComplete(Result result) {
+                        var statusCode = result.getResponse().getStatus();
 
-                // NOTE this is the timeout for receiving response headers, rather than the response body - it's not clear what this timeout should be set to
-                var response = responseListener.get(5, TimeUnit.SECONDS);
-                var statusCode = response.getStatus();
-
-                if (statusCode == 200) {
-                    try (var responseContent = responseListener.getInputStream()) {
-                        listener.onResponse(responseContent.readAllBytes());
-                    } catch (Exception e) {
-                        listener.onFailure(e);
+                        if (result.isSucceeded() && statusCode == 200) {
+                            try {
+                                listener.onResponse(getContentAsInputStream().readAllBytes());
+                            } catch (Exception e) {
+                                listener.onFailure(e);
+                            }
+                        } else {
+                            listener.onFailure(
+                                new ElasticsearchSecurityException(
+                                    "Get [" + uri + "] failed, status [" + statusCode + "], reason [" + result.getResponse().getReason() + "]."
+                                )
+                            );
+                        }
                     }
-                } else {
-                    listener.onFailure(
-                        new ElasticsearchSecurityException(
-                            "Get [" + uri + "] failed, status [" + statusCode + "], reason [" + response.getReason() + "]."
-                        )
-                    );
-                }
+                };
+                httpClient.newRequest(uri).send(responseListener);
             } catch (Exception e) {
                 listener.onFailure(new ElasticsearchSecurityException("Get [" + uri + "] failed.", e));
             }
