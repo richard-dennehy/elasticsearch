@@ -177,7 +177,23 @@ public class SamlRealmSettings {
         }, Setting.Property.NodeScope)
     );
 
-    public static final String SSL_PREFIX = "ssl.";
+    public static final Function<String, Setting.AffixSetting<String>> AZURE_CLIENT_ID = (type) -> RealmSettings.simpleString(
+        type,
+        "client_id",
+        Setting.Property.NodeScope
+    );
+
+    public static final Function<String, Setting.AffixSetting<String>> AZURE_CLIENT_SECRET = (type) -> RealmSettings.simpleString(
+        type,
+        "client_secret",
+        Setting.Property.NodeScope
+    );
+
+    public static final Function<String, Setting.AffixSetting<String>> AZURE_TENANT_ID = (type) -> RealmSettings.simpleString(
+        type,
+        "tenant_id",
+        Setting.Property.NodeScope
+    );
 
     private SamlRealmSettings() {}
 
@@ -201,7 +217,10 @@ public class SamlRealmSettings {
             ENCRYPTION_KEY_ALIAS.apply(type),
             SIGNING_KEY_ALIAS.apply(type),
             SIGNING_MESSAGE_TYPES.apply(type),
-            REQUESTED_AUTHN_CONTEXT_CLASS_REF.apply(type)
+            REQUESTED_AUTHN_CONTEXT_CLASS_REF.apply(type),
+            AZURE_CLIENT_ID.apply(type),
+            AZURE_CLIENT_SECRET.apply(type),
+            AZURE_TENANT_ID.apply(type)
         );
 
         set.addAll(X509KeyPairSettings.affix(RealmSettings.realmSettingPrefix(type), ENCRYPTION_SETTING_KEY, false));
