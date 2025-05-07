@@ -658,7 +658,8 @@ public final class SamlRealm extends Realm implements Releasable {
             var authenticate = new HttpPost(
                 // TODO the tenant ID is a claim, we could use that instead
                 Strings.format(
-                    "https://login.microsoftonline.com/%s/oauth2/v2.0/token",
+                    "%s/%s/oauth2/v2.0/token",
+                    config.getSetting(SamlRealmSettings.AZURE_ACCESS_TOKEN_HOST),
                     config.getSetting(SamlRealmSettings.AZURE_TENANT_ID)
                 )
             );
@@ -679,7 +680,11 @@ public final class SamlRealm extends Realm implements Releasable {
             logger.trace("Azure access token [{}]", bearer);
 
             var getGroupMembership = new HttpGet(
-                Strings.format("https://graph.microsoft.com/v1.0/users/%s/memberOf/microsoft.graph.group?$select=id", principal)
+                Strings.format(
+                    "%s/v1.0/users/%s/memberOf/microsoft.graph.group?$select=id&$top=999",
+                    config.getSetting(SamlRealmSettings.AZURE_MS_GRAPH_HOST),
+                    principal
+                )
             );
             getGroupMembership.addHeader("Authorization", "Bearer " + bearer);
             logger.trace("getting group membership from {}", getGroupMembership.getURI());
@@ -701,6 +706,7 @@ public final class SamlRealm extends Realm implements Releasable {
 
             logger.trace("Got {} groups from Graph {}", groups.size(), String.join(", ", groups));
         } catch (Exception e) {
+            logger.error("Error while authenticating user", e);
             throw new RuntimeException(e);
         }
     }
