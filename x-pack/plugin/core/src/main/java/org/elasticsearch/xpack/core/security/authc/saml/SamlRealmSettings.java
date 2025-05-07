@@ -179,20 +179,32 @@ public class SamlRealmSettings {
 
     public static final Function<String, Setting.AffixSetting<String>> AZURE_CLIENT_ID = (type) -> RealmSettings.simpleString(
         type,
-        "client_id",
+        "azure.client_id",
         Setting.Property.NodeScope
     );
 
     public static final Function<String, Setting.AffixSetting<String>> AZURE_CLIENT_SECRET = (type) -> RealmSettings.simpleString(
         type,
-        "client_secret",
+        "azure.client_secret",
         Setting.Property.NodeScope
     );
 
     public static final Function<String, Setting.AffixSetting<String>> AZURE_TENANT_ID = (type) -> RealmSettings.simpleString(
         type,
-        "tenant_id",
+        "azure.tenant_id",
         Setting.Property.NodeScope
+    );
+
+    public static final Function<String, Setting.AffixSetting<String>> AZURE_ACCESS_TOKEN_HOST = (type) -> Setting.affixKeySetting(
+        RealmSettings.realmSettingPrefix(type),
+        "azure.access_token_host",
+        key -> Setting.simpleString(key, "https://login.microsoftonline.com/", Setting.Property.NodeScope)
+    );
+
+    public static final Function<String, Setting.AffixSetting<String>> AZURE_MS_GRAPH_HOST = (type) -> Setting.affixKeySetting(
+        RealmSettings.realmSettingPrefix(type),
+        "azure.graph_host",
+        key -> Setting.simpleString(key, "https://graph.microsoft.com/", Setting.Property.NodeScope)
     );
 
     private SamlRealmSettings() {}
@@ -220,7 +232,9 @@ public class SamlRealmSettings {
             REQUESTED_AUTHN_CONTEXT_CLASS_REF.apply(type),
             AZURE_CLIENT_ID.apply(type),
             AZURE_CLIENT_SECRET.apply(type),
-            AZURE_TENANT_ID.apply(type)
+            AZURE_TENANT_ID.apply(type),
+            AZURE_ACCESS_TOKEN_HOST.apply(type),
+            AZURE_MS_GRAPH_HOST.apply(type)
         );
 
         set.addAll(X509KeyPairSettings.affix(RealmSettings.realmSettingPrefix(type), ENCRYPTION_SETTING_KEY, false));

@@ -97,10 +97,14 @@ public class SamlAuthenticationIT extends ESRestTestCase {
 
     private static final String SAML_RESPONSE_FIELD = "SAMLResponse";
     private static final String KIBANA_PASSWORD = "K1b@na K1b@na K1b@na";
+    private static final String TENANT_ID = "tenant_id";
+    private static final String CLIENT_ID = "client_id";
+    private static final String CLIENT_SECRET = "client_secret";
 
     private static Network network = Network.newNetwork();
     private static OpenLdapTestContainer openLdapTestContainer = new OpenLdapTestContainer(network);
     private static IdpTestContainer idpFixture = new IdpTestContainer(network);
+    private static final AzureGraphHttpFixture graphFixture = new AzureGraphHttpFixture(TENANT_ID, CLIENT_ID, CLIENT_SECRET, "thor");
 
     private static ElasticsearchCluster cluster = ElasticsearchCluster.local()
         .distribution(DistributionType.DEFAULT)
@@ -122,6 +126,11 @@ public class SamlAuthenticationIT extends ESRestTestCase {
         .setting("xpack.security.authc.realms.saml.shibboleth.attributes.name", "urn:oid:2.5.4.3")
         .setting("xpack.security.authc.realms.saml.shibboleth.signing.key", "sp-signing.key")
         .setting("xpack.security.authc.realms.saml.shibboleth.signing.certificate", "sp-signing.crt")
+        .setting("xpack.security.authc.realms.saml.shibboleth.azure.client_id", CLIENT_ID)
+        .setting("xpack.security.authc.realms.saml.shibboleth.azure.client_secret", CLIENT_SECRET)
+        .setting("xpack.security.authc.realms.saml.shibboleth.azure.tenant_id", TENANT_ID)
+        .setting("xpack.security.authc.realms.saml.shibboleth.azure.access_token_host", graphFixture::getBaseUrl)
+        .setting("xpack.security.authc.realms.saml.shibboleth.azure.graph_host", graphFixture::getBaseUrl)
         // SAML realm 2 (uses authorization_realms)
         .setting("xpack.security.authc.realms.saml.shibboleth_native.order", "2")
         .setting("xpack.security.authc.realms.saml.shibboleth_native.idp.entity_id", "https://test.shibboleth.elastic.local/")
@@ -152,7 +161,7 @@ public class SamlAuthenticationIT extends ESRestTestCase {
         .build();
 
     @ClassRule
-    public static TestRule ruleChain = RuleChain.outerRule(network).around(openLdapTestContainer).around(idpFixture).around(cluster);
+    public static TestRule ruleChain = RuleChain.outerRule(network).around(openLdapTestContainer).around(idpFixture).around(graphFixture).around(cluster);
 
     private static String calculateIdpMetaData() {
         Resource resource = Resource.fromClasspath("/idp/shibboleth-idp/metadata/idp-metadata.xml");
