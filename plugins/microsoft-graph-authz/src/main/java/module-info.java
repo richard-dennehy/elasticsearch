@@ -12,4 +12,7 @@ module org.elasticsearch.plugin.security.authz {
     requires org.elasticsearch.server;
     requires org.elasticsearch.xcore;
     requires org.elasticsearch.logging;
+    requires org.apache.httpcomponents.httpclient;
+    requires org.apache.httpcomponents.httpcore;
+    requires com.nimbusds.jose.jwt;
 }
