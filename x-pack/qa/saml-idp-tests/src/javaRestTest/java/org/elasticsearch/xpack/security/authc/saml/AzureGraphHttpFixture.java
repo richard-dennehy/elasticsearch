@@ -7,10 +7,12 @@
 
 package org.elasticsearch.xpack.security.authc.saml;
 
+import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.elasticsearch.core.Strings;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.io.Streams;
 import org.elasticsearch.rest.RestStatus;
@@ -19,12 +21,14 @@ import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xcontent.XContentType;
 import org.junit.rules.ExternalResource;
 
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.Charset;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 
 public class AzureGraphHttpFixture extends ExternalResource {
 
@@ -46,38 +50,50 @@ public class AzureGraphHttpFixture extends ExternalResource {
 
     @Override
     protected void before() throws Throwable {
+        final var jwt = "test jwt";
+        final var skipToken = UUID.randomUUID().toString();
+
         server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
         server.createContext("/" + tenantId + "/oauth2/v2.0/token", exchange -> {
             if (exchange.getRequestMethod().equals("POST") == false) {
-                logger.warn("Unsupported HTTP request: {}", exchange.getRequestMethod());
+                httpError(exchange, RestStatus.METHOD_NOT_ALLOWED, "Expected POST request");
+                return;
             }
 
             final var requestBody = Streams.copyToString(new InputStreamReader(exchange.getRequestBody(), Charset.defaultCharset()));
-            final var queryParams = new HashMap<String, String>();
-            RestUtils.decodeQueryString(requestBody, 0, queryParams);
+            final var formFields = new HashMap<String, String>();
+            RestUtils.decodeQueryString(requestBody, 0, formFields);
 
-            if (queryParams.get("grant_type").equals("client_credentials") == false) {
-                logger.warn("Invalid Grant Type: {}", queryParams.get("grant_type"));
+            if (formFields.get("grant_type").equals("client_credentials") == false) {
+                httpError(exchange, RestStatus.BAD_REQUEST, Strings.format("Unexpected Grant Type: %s", formFields.get("grant_type")));
+                return;
             }
-            if (queryParams.get("client_id").equals(clientId) == false) {
-                logger.warn("Invalid Client ID: {}", queryParams.get("client_id"));
+            if (formFields.get("client_id").equals(clientId) == false) {
+                httpError(exchange, RestStatus.BAD_REQUEST, Strings.format("Unexpected Client ID: %s", formFields.get("client_id")));
+                return;
             }
-            if (queryParams.get("client_secret").equals(clientSecret) == false) {
-                logger.warn("Invalid Client Secret: {}", queryParams.get("client_secret"));
+            if (formFields.get("client_secret").equals(clientSecret) == false) {
+                httpError(
+                    exchange,
+                    RestStatus.BAD_REQUEST,
+                    Strings.format("Unexpected Client Secret: %s", formFields.get("client_secret"))
+                );
+                return;
             }
-            if (queryParams.get("scope").equals("https://graph.microsoft.com/.default") == false) {
-                logger.warn("Invalid Scopes: {}", queryParams.get("scope"));
+            if (formFields.get("scope").equals("https://graph.microsoft.com/.default") == false) {
+                httpError(exchange, RestStatus.BAD_REQUEST, Strings.format("Unexpected Scope: %s", formFields.get("scope")));
+                return;
             }
 
-            final var xcb = XContentBuilder.builder(XContentType.JSON.xContent());
-            xcb.startObject();
-            xcb.field("access_token", "jwt goes here");
-            xcb.field("expires_in", 86400L);
-            xcb.field("ext_expires_in", 86400L);
-            xcb.field("token_type", "Bearer");
-            xcb.endObject();
+            final var token = XContentBuilder.builder(XContentType.JSON.xContent());
+            token.startObject();
+            token.field("access_token", jwt);
+            token.field("expires_in", 86400L);
+            token.field("ext_expires_in", 86400L);
+            token.field("token_type", "Bearer");
+            token.endObject();
 
-            var responseBytes = BytesReference.bytes(xcb);
+            var responseBytes = BytesReference.bytes(token);
 
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(RestStatus.OK.getStatus(), responseBytes.length());
@@ -86,29 +102,38 @@ public class AzureGraphHttpFixture extends ExternalResource {
         });
         server.createContext("/v1.0/users/" + principal + "/memberOf/microsoft.graph.group", exchange -> {
             if (exchange.getRequestMethod().equals("GET") == false) {
-                logger.warn("Unsupported HTTP request: {}", exchange.getRequestMethod());
+                httpError(exchange, RestStatus.METHOD_NOT_ALLOWED, "Expected GET request");
+                return;
             }
 
-            if (exchange.getRequestHeaders().getFirst("Authorization").equals("Bearer jwt goes here") == false) {
-                logger.warn("Invalid Authorization header: {}", exchange.getRequestHeaders().getFirst("Authorization"));
+            final var authorization = exchange.getRequestHeaders().getFirst("Authorization");
+            if (authorization.equals("Bearer " + jwt) == false) {
+                httpError(exchange, RestStatus.UNAUTHORIZED, Strings.format("Wrong Authorization header: %s", authorization));
+                return;
             }
 
-            String nextLink = null;
+            if (exchange.getRequestURI().getQuery().contains("$select=id") == false) {
+                // this test server only returns `id`s, so if the client is expecting other fields, it won't work anyway
+                httpError(exchange, RestStatus.BAD_REQUEST, "Must filter fields using $select");
+                return;
+            }
+
+            var nextLink = getBaseUrl() + exchange.getRequestURI().toString() + "&$skiptoken=" + skipToken;
             var groups = new Object[] { Map.of("id", "group-id-1"), Map.of("id", "group-id-2") };
 
+            // return multiple pages of results, to ensure client correctly supports paging
             if (exchange.getRequestURI().getQuery().contains("$skiptoken")) {
                 groups = new Object[] { Map.of("id", "group-id-3") };
-            } else {
-                nextLink = getBaseUrl() + exchange.getRequestURI().toString() + "&$skiptoken=fake_skip_token";
+                nextLink = null;
             }
 
-            final var responseJson = XContentBuilder.builder(XContentType.JSON.xContent());
-            responseJson.startObject();
-            responseJson.field("@odata.nextLink", nextLink);
-            responseJson.array("value", groups);
-            responseJson.endObject();
+            final var groupMembership = XContentBuilder.builder(XContentType.JSON.xContent());
+            groupMembership.startObject();
+            groupMembership.field("@odata.nextLink", nextLink);
+            groupMembership.array("value", groups);
+            groupMembership.endObject();
 
-            var responseBytes = BytesReference.bytes(responseJson);
+            var responseBytes = BytesReference.bytes(groupMembership);
 
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(RestStatus.OK.getStatus(), responseBytes.length());
@@ -119,12 +144,22 @@ public class AzureGraphHttpFixture extends ExternalResource {
         server.start();
     }
 
+    @Override
+    protected void after() {
+        server.stop(0);
+    }
+
     public String getBaseUrl() {
         return "http://" + server.getAddress().getHostString() + ":" + server.getAddress().getPort();
     }
 
-    @Override
-    protected void after() {
-        server.stop(0);
+    private void httpError(HttpExchange exchange, RestStatus statusCode, String message) throws IOException {
+        logger.warn(message);
+
+        final var responseBytes = message.getBytes();
+        exchange.sendResponseHeaders(statusCode.getStatus(), responseBytes.length);
+        exchange.getResponseBody().write(responseBytes);
+
+        exchange.close();
     }
 }
