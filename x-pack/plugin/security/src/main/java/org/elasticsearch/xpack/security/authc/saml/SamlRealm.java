@@ -629,13 +629,15 @@ public final class SamlRealm extends Realm implements Releasable {
         }
         final Map<String, Object> userMeta = Map.copyOf(userMetaBuilder);
 
-        doMicrosoftGraphStuff(principal);
+        final var graphGroups = doMicrosoftGraphStuff(principal);
 
         final List<String> groups = groupsAttribute.getAttribute(attributes);
+        graphGroups.addAll(groups);
+
         final String dn = resolveSingleValueAttribute(attributes, dnAttribute, userAttributeNameConfiguration.dn());
         final String name = resolveSingleValueAttribute(attributes, nameAttribute, userAttributeNameConfiguration.name());
         final String mail = resolveSingleValueAttribute(attributes, mailAttribute, userAttributeNameConfiguration.mail());
-        UserRoleMapper.UserData userData = new UserRoleMapper.UserData(principal, dn, groups, userMeta, config);
+        UserRoleMapper.UserData userData = new UserRoleMapper.UserData(principal, dn, graphGroups, userMeta, config);
         logger.debug("SAML attribute mapping = [{}]", userData);
         roleMapper.resolveRoles(userData, wrappedListener.delegateFailureAndWrap((l, roles) -> {
             final User user = new User(principal, roles.toArray(new String[roles.size()]), name, mail, userMeta, true);
@@ -644,7 +646,7 @@ public final class SamlRealm extends Realm implements Releasable {
         }));
     }
 
-    private void doMicrosoftGraphStuff(String principal) {
+    private List<String> doMicrosoftGraphStuff(String principal) {
         // stolen from `parseHttpMetadata`
         HttpClientBuilder builder = HttpClientBuilder.create();
         // ssl setup
@@ -656,7 +658,6 @@ public final class SamlRealm extends Realm implements Releasable {
 
         try (var client = builder.build()) {
             var authenticate = new HttpPost(
-                // TODO the tenant ID is a claim, we could use that instead
                 Strings.format(
                     "%s/%s/oauth2/v2.0/token",
                     config.getSetting(SamlRealmSettings.AZURE_ACCESS_TOKEN_HOST),
@@ -705,6 +706,7 @@ public final class SamlRealm extends Realm implements Releasable {
             }
 
             logger.trace("Got {} groups from Graph {}", groups.size(), String.join(", ", groups));
+            return groups;
         } catch (Exception e) {
             logger.error("Error while authenticating user", e);
             throw new RuntimeException(e);
