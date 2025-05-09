@@ -100,6 +100,7 @@ public class AzureGraphHttpFixture extends ExternalResource {
             responseBytes.writeTo(exchange.getResponseBody());
             exchange.close();
         });
+        // TODO need to handle user info call as well as group membership
         server.createContext("/v1.0/users/" + principal + "/memberOf/microsoft.graph.group", exchange -> {
             if (exchange.getRequestMethod().equals("GET") == false) {
                 httpError(exchange, RestStatus.METHOD_NOT_ALLOWED, "Expected GET request");
