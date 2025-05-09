@@ -5,16 +5,16 @@
  * 2.0.
  */
 
-package org.elasticsearch.xpack.security.authc.saml;
+package org.elasticsearch.plugin.security.authz;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.elasticsearch.core.Strings;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.io.Streams;
+import org.elasticsearch.core.Strings;
 import org.elasticsearch.rest.RestStatus;
 import org.elasticsearch.rest.RestUtils;
 import org.elasticsearch.xcontent.XContentBuilder;
@@ -38,14 +38,25 @@ public class AzureGraphHttpFixture extends ExternalResource {
     private final String clientId;
     private final String clientSecret;
     private final String principal;
+    private final String displayName;
+    private final String email;
 
     private HttpServer server;
 
-    public AzureGraphHttpFixture(String tenantId, String clientId, String clientSecret, String principal) {
+    public AzureGraphHttpFixture(
+        String tenantId,
+        String clientId,
+        String clientSecret,
+        String principal,
+        String displayName,
+        String email
+    ) {
         this.tenantId = tenantId;
         this.clientId = clientId;
         this.clientSecret = clientSecret;
         this.principal = principal;
+        this.displayName = displayName;
+        this.email = email;
     }
 
     @Override
@@ -100,7 +111,37 @@ public class AzureGraphHttpFixture extends ExternalResource {
             responseBytes.writeTo(exchange.getResponseBody());
             exchange.close();
         });
-        // TODO need to handle user info call as well as group membership
+        server.createContext("/v1.0/users/" + principal, exchange -> {
+            if (exchange.getRequestMethod().equals("GET") == false) {
+                httpError(exchange, RestStatus.METHOD_NOT_ALLOWED, "Expected GET request");
+                return;
+            }
+
+            final var authorization = exchange.getRequestHeaders().getFirst("Authorization");
+            if (authorization.equals("Bearer " + jwt) == false) {
+                httpError(exchange, RestStatus.UNAUTHORIZED, Strings.format("Wrong Authorization header: %s", authorization));
+                return;
+            }
+
+            if (exchange.getRequestURI().getQuery().contains("$select=displayName,mail") == false) {
+                httpError(exchange, RestStatus.BAD_REQUEST, "Must filter fields using $select");
+                return;
+            }
+
+            var userProperties = XContentBuilder.builder(XContentType.JSON.xContent());
+            userProperties.startObject();
+            userProperties.field("displayName", displayName);
+            userProperties.field("mail", email);
+            userProperties.endObject();
+
+            var responseBytes = BytesReference.bytes(userProperties);
+
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(RestStatus.OK.getStatus(), responseBytes.length());
+            responseBytes.writeTo(exchange.getResponseBody());
+
+            exchange.close();
+        });
         server.createContext("/v1.0/users/" + principal + "/memberOf/microsoft.graph.group", exchange -> {
             if (exchange.getRequestMethod().equals("GET") == false) {
                 httpError(exchange, RestStatus.METHOD_NOT_ALLOWED, "Expected GET request");

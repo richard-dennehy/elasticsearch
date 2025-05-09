@@ -31,7 +31,9 @@ import org.elasticsearch.xpack.core.security.authc.RealmConfig;
 import org.elasticsearch.xpack.core.security.authc.support.UserRoleMapper;
 import org.elasticsearch.xpack.core.security.user.User;
 
+import java.io.IOException;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.List;
@@ -71,76 +73,21 @@ public class MicrosoftGraphAuthzRealm extends Realm {
     @Override
     public void lookupUser(String principal, ActionListener<User> listener) {
         try {
-            var authenticate = new HttpPost(
-                Strings.format(
-                    "%s/%s/oauth2/v2.0/token",
-                    config.getSetting(MicrosoftGraphAuthzRealmSettings.ACCESS_TOKEN_HOST),
-                    config.getSetting(MicrosoftGraphAuthzRealmSettings.TENANT_ID)
-                )
-            );
-            authenticate.setEntity(
-                new UrlEncodedFormEntity(
-                    List.of(
-                        new BasicNameValuePair("grant_type", "client_credentials"),
-                        new BasicNameValuePair("scope", "https://graph.microsoft.com/.default"),
-                        new BasicNameValuePair("client_id", config.getSetting(MicrosoftGraphAuthzRealmSettings.CLIENT_ID)),
-                        new BasicNameValuePair("client_secret", config.getSetting(MicrosoftGraphAuthzRealmSettings.CLIENT_SECRET))
-                    )
-                )
-            );
-            logger.trace("getting bearer token from {}", authenticate.getURI());
-            var response = httpClient.execute(authenticate, new BasicResponseHandler());
-
-            var json = JSONObjectUtils.parse(response);
-            var bearer = json.get("access_token");
-            logger.trace("Azure access token [{}]", bearer);
-
-            var getUserInfo = new HttpGet(
-                Strings.format(
-                    "%s/v1.0/users/%s?$select=mail,displayName",
-                    config.getSetting(MicrosoftGraphAuthzRealmSettings.API_HOST),
-                    principal
-                )
-            );
-            getUserInfo.addHeader("Authorization", "Bearer " + bearer);
-            logger.trace("getting user info from {}", getUserInfo.getURI());
-            response = httpClient.execute(getUserInfo, new BasicResponseHandler());
-            var userInfo = parseUserInfo(response);
-            var name = userInfo.v2();
-            var email = userInfo.v1();
-            logger.trace("User [{}] has email [{}]", name, email);
-
-            var getGroupMembership = new HttpGet(
-                Strings.format(
-                    "%s/v1.0/users/%s/memberOf/microsoft.graph.group?$select=id&$top=999",
-                    config.getSetting(MicrosoftGraphAuthzRealmSettings.API_HOST),
-                    principal
-                )
-            );
-            getGroupMembership.addHeader("Authorization", "Bearer " + bearer);
-            logger.trace("getting group membership from {}", getGroupMembership.getURI());
-            response = httpClient.execute(getGroupMembership, new BasicResponseHandler());
-
-            var groupMembership = parseGroupMembershipResponse(response);
-            var nextPage = groupMembership.v1();
-            var groups = new ArrayList<>(groupMembership.v2());
-
-            while (nextPage != null) {
-                getGroupMembership.setURI(new URI(nextPage));
-                logger.trace("getting group membership from {}", getGroupMembership.getURI());
-                response = httpClient.execute(getGroupMembership, new BasicResponseHandler());
-
-                groupMembership = parseGroupMembershipResponse(response);
-                nextPage = groupMembership.v1();
-                groups.addAll(groupMembership.v2());
-            }
-
-            logger.trace("Got {} groups from Graph {}", groups.size(), String.join(", ", groups));
+            final var token = fetchAccessToken();
+            final var userProperties = fetchUserProperties(principal, token);
+            final var groups = fetchGroupMembership(principal, token);
 
             final var userData = new UserRoleMapper.UserData(principal, null, groups, Map.of(), config);
 
             roleMapper.resolveRoles(userData, listener.delegateFailureAndWrap((l, roles) -> {
-                final var user = new User(principal, roles.toArray(Strings.EMPTY_ARRAY), name, email, Map.of(), true);
+                final var user = new User(
+                    principal,
+                    roles.toArray(Strings.EMPTY_ARRAY),
+                    userProperties.v1(),
+                    userProperties.v2(),
+                    Map.of(),
+                    true
+                );
                 logger.debug("Entra ID user {}", user);
                 l.onResponse(user);
             }));
@@ -149,27 +96,82 @@ public class MicrosoftGraphAuthzRealm extends Realm {
         }
     }
 
-    private Tuple<String, String> parseUserInfo(String response) throws ParseException {
-        var json = JSONObjectUtils.parse(response);
+    private String fetchAccessToken() throws IOException, ParseException {
+        var request = new HttpPost(
+            Strings.format(
+                "%s/%s/oauth2/v2.0/token",
+                config.getSetting(MicrosoftGraphAuthzRealmSettings.ACCESS_TOKEN_HOST),
+                config.getSetting(MicrosoftGraphAuthzRealmSettings.TENANT_ID)
+            )
+        );
+        request.setEntity(
+            new UrlEncodedFormEntity(
+                List.of(
+                    new BasicNameValuePair("grant_type", "client_credentials"),
+                    new BasicNameValuePair("scope", "https://graph.microsoft.com/.default"),
+                    new BasicNameValuePair("client_id", config.getSetting(MicrosoftGraphAuthzRealmSettings.CLIENT_ID)),
+                    new BasicNameValuePair("client_secret", config.getSetting(MicrosoftGraphAuthzRealmSettings.CLIENT_SECRET))
+                )
+            )
+        );
+        logger.trace("getting bearer token from {}", request.getURI());
+        final var response = httpClient.execute(request, new BasicResponseHandler());
 
-        var email = (String) json.get("mail");
-        var name = (String) json.get("displayName");
+        final var json = JSONObjectUtils.parse(response);
+        final var token = (String) json.get("access_token");
+        logger.trace("Azure access token [{}]", token);
 
-        return Tuple.tuple(email, name);
+        return token;
     }
 
-    private Tuple<String, List<String>> parseGroupMembershipResponse(String response) throws ParseException {
-        var json = JSONObjectUtils.parse(response);
+    private Tuple<String, String> fetchUserProperties(String userId, String token) throws IOException, ParseException {
+        var request = new HttpGet(
+            Strings.format(
+                "%s/v1.0/users/%s?$select=displayName,mail",
+                config.getSetting(MicrosoftGraphAuthzRealmSettings.API_HOST),
+                userId
+            )
+        );
+        request.addHeader("Authorization", "Bearer " + token);
+        logger.trace("getting user info from {}", request.getURI());
+        final var response = httpClient.execute(request, new BasicResponseHandler());
 
-        var nextLink = (String) json.get("@odata.nextLink");
-        var groups = ((List<?>) json.get("value")).stream().map(group -> {
-            if (group instanceof Map<?, ?> m) {
-                return (String) m.get("id");
-            } else {
-                return null;
+        final var json = JSONObjectUtils.parse(response);
+        final var email = (String) json.get("mail");
+        final var name = (String) json.get("displayName");
+
+        logger.trace("User [{}] has email [{}]", name, email);
+
+        return Tuple.tuple(name, email);
+    }
+
+    private List<String> fetchGroupMembership(String userId, String token) throws IOException, ParseException, URISyntaxException {
+        var request = new HttpGet();
+        request.addHeader("Authorization", "Bearer " + token);
+
+        var nextPage = Strings.format(
+            "%s/v1.0/users/%s/memberOf/microsoft.graph.group?$select=id&$top=999",
+            config.getSetting(MicrosoftGraphAuthzRealmSettings.API_HOST),
+            userId
+        );
+        var groups = new ArrayList<String>();
+
+        while (nextPage != null) {
+            request.setURI(new URI(nextPage));
+            logger.trace("getting group membership from {}", request.getURI());
+            final var response = httpClient.execute(request, new BasicResponseHandler());
+
+            var json = JSONObjectUtils.parse(response);
+            nextPage = (String) json.get("@odata.nextLink");
+            for (var groupData: (List<?>) json.get("value")) {
+                final var properties = (Map<?, ?>) groupData;
+                groups.add((String) properties.get("id"));
             }
-        }).toList();
+        }
 
-        return Tuple.tuple(nextLink, groups);
+        logger.trace("Got {} groups from Graph {}", groups.size(), String.join(", ", groups));
+
+        return groups;
     }
+
 }
