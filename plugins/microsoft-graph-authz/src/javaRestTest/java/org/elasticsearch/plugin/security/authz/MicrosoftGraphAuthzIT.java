@@ -1,10 +1,13 @@
 /*
  * Copyright Elasticsearch B.V. and/or licensed to Elasticsearch B.V. under one
- * or more contributor license agreements. Licensed under the Elastic License
- * 2.0; you may not use this file except in compliance with the Elastic License
- * 2.0.
+ * or more contributor license agreements. Licensed under the "Elastic License
+ * 2.0", the "GNU Affero General Public License v3.0 only", and the "Server Side
+ * Public License v 1"; you may not use this file except in compliance with, at
+ * your election, the "Elastic License 2.0", the "GNU Affero General Public
+ * License v3.0 only", or the "Server Side Public License, v 1".
  */
-package org.elasticsearch.xpack.security.authc.saml;
+
+package org.elasticsearch.plugin.security.authz;
 
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakFilters;
 
@@ -79,37 +82,42 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509ExtendedTrustManager;
 
-import static java.util.Map.entry;
 import static org.elasticsearch.common.xcontent.XContentHelper.convertToMap;
 import static org.hamcrest.Matchers.contains;
-import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.startsWith;
 
-/**
- * An integration test for validating SAML authentication against a real Identity Provider (Shibboleth)
- */
 @ThreadLeakFilters(filters = { TestContainersThreadFilter.class })
-public class SamlAuthenticationIT extends ESRestTestCase {
+public class MicrosoftGraphAuthzIT extends ESRestTestCase {
 
     private static final String SAML_RESPONSE_FIELD = "SAMLResponse";
     private static final String KIBANA_PASSWORD = "K1b@na K1b@na K1b@na";
+    private static final String TENANT_ID = "tenant_id";
+    private static final String CLIENT_ID = "client_id";
+    private static final String CLIENT_SECRET = "client_secret";
 
     private static Network network = Network.newNetwork();
-    private static OpenLdapTestContainer openLdapTestContainer = new OpenLdapTestContainer(network);
     private static IdpTestContainer idpFixture = new IdpTestContainer(network);
+    private static OpenLdapTestContainer openLdapTestContainer = new OpenLdapTestContainer(network);
+    private static final AzureGraphHttpFixture graphFixture = new AzureGraphHttpFixture(
+        TENANT_ID,
+        CLIENT_ID,
+        CLIENT_SECRET,
+        "thor",
+        "Thor Odinson",
+        "thor@oldap.test.elasticsearch.com"
+    );
 
     private static ElasticsearchCluster cluster = ElasticsearchCluster.local()
         .distribution(DistributionType.DEFAULT)
+        .plugin("microsoft-graph-authz")
         .setting("xpack.license.self_generated.type", "trial")
         .setting("xpack.security.enabled", "true")
         .setting("xpack.security.http.ssl.enabled", "false")
         .setting("xpack.security.authc.token.enabled", "true")
-        .setting("xpack.security.authc.realms.file.file.order", "0")
-        // SAML realm 1 (no authorization_realms)
         .setting("xpack.security.authc.realms.saml.shibboleth.order", "1")
         .setting("xpack.security.authc.realms.saml.shibboleth.idp.entity_id", "https://test.shibboleth.elastic.local/")
         .setting("xpack.security.authc.realms.saml.shibboleth.idp.metadata.path", "idp-metadata.xml")
@@ -122,37 +130,23 @@ public class SamlAuthenticationIT extends ESRestTestCase {
         .setting("xpack.security.authc.realms.saml.shibboleth.attributes.name", "urn:oid:2.5.4.3")
         .setting("xpack.security.authc.realms.saml.shibboleth.signing.key", "sp-signing.key")
         .setting("xpack.security.authc.realms.saml.shibboleth.signing.certificate", "sp-signing.crt")
+        .setting("xpack.security.authc.realms.saml.shibboleth.authorization_realms", "microsoft_graph1")
         // SAML realm 2 (uses authorization_realms)
-        .setting("xpack.security.authc.realms.saml.shibboleth_native.order", "2")
-        .setting("xpack.security.authc.realms.saml.shibboleth_native.idp.entity_id", "https://test.shibboleth.elastic.local/")
-        .setting("xpack.security.authc.realms.saml.shibboleth_native.idp.metadata.path", "idp-metadata.xml")
-        .setting("xpack.security.authc.realms.saml.shibboleth_native.sp.entity_id", "http://mock2.http.elastic.local/")
-        .setting("xpack.security.authc.realms.saml.shibboleth_native.sp.acs", "http://localhost:54321/saml/acs2")
-        .setting("xpack.security.authc.realms.saml.shibboleth_native.attributes.principal", "uid")
-        .setting("xpack.security.authc.realms.saml.shibboleth_native.authorization_realms", "native")
-        .setting("xpack.security.authc.realms.saml.shibboleth_native.signing.key", "sp-signing.key")
-        .setting("xpack.security.authc.realms.saml.shibboleth_native.signing.certificate", "sp-signing.crt")
-        // SAML realm 3 (used for negative tests with multiple realms)
-        .setting("xpack.security.authc.realms.saml.shibboleth_negative.order", "3")
-        .setting("xpack.security.authc.realms.saml.shibboleth_negative.idp.entity_id", "https://test.shibboleth.elastic.local/")
-        .setting("xpack.security.authc.realms.saml.shibboleth_negative.idp.metadata.path", "idp-metadata.xml")
-        .setting("xpack.security.authc.realms.saml.shibboleth_negative.sp.entity_id", "somethingwronghere")
-        .setting("xpack.security.authc.realms.saml.shibboleth_negative.sp.acs", "http://localhost:54321/saml/acs3")
-        .setting("xpack.security.authc.realms.saml.shibboleth_negative.attributes.principal", "uid")
-        .setting("xpack.security.authc.realms.saml.shibboleth_negative.authorization_realms", "native")
-        .setting("xpack.security.authc.realms.saml.shibboleth_negative.signing.key", "sp-signing.key")
-        .setting("xpack.security.authc.realms.saml.shibboleth_negative.signing.certificate", "sp-signing.crt")
-        .setting("xpack.security.authc.realms.native.native.order", "4")
+        .setting("xpack.security.authc.realms.microsoft_graph.microsoft_graph1.order", "2")
+        .setting("xpack.security.authc.realms.microsoft_graph.microsoft_graph1.client_id", CLIENT_ID)
+        .setting("xpack.security.authc.realms.microsoft_graph.microsoft_graph1.client_secret", CLIENT_SECRET)
+        .setting("xpack.security.authc.realms.microsoft_graph.microsoft_graph1.tenant_id", TENANT_ID)
+        .setting("xpack.security.authc.realms.microsoft_graph.microsoft_graph1.graph_host", graphFixture::getBaseUrl)
+        .setting("xpack.security.authc.realms.microsoft_graph.microsoft_graph1.access_token_host", graphFixture::getBaseUrl)
+        .setting("xpack.security.authc.realms.native.native.order", "3")
         .setting("xpack.ml.enabled", "false")
         .setting("logger.org.elasticsearch.xpack.security", "TRACE")
+        .setting("logger.org.elasticsearch.plugin.security", "TRACE")
         .configFile("sp-signing.key", Resource.fromClasspath("/idp/shibboleth-idp/credentials/sp-signing.key"))
-        .configFile("idp-metadata.xml", Resource.fromString(SamlAuthenticationIT::calculateIdpMetaData))
+        .configFile("idp-metadata.xml", Resource.fromString(MicrosoftGraphAuthzIT::calculateIdpMetaData))
         .configFile("sp-signing.crt", Resource.fromClasspath("/idp/shibboleth-idp/credentials/sp-signing.crt"))
         .user("test_admin", "x-pack-test-password")
         .build();
-
-    @ClassRule
-    public static TestRule ruleChain = RuleChain.outerRule(network).around(openLdapTestContainer).around(idpFixture).around(cluster);
 
     private static String calculateIdpMetaData() {
         Resource resource = Resource.fromClasspath("/idp/shibboleth-idp/metadata/idp-metadata.xml");
@@ -163,6 +157,13 @@ public class SamlAuthenticationIT extends ESRestTestCase {
             throw new RuntimeException(e);
         }
     }
+
+    @ClassRule
+    public static TestRule ruleChain = RuleChain.outerRule(network)
+        .around(openLdapTestContainer)
+        .around(idpFixture)
+        .around(graphFixture)
+        .around(cluster);
 
     @Override
     protected String getTestRestCluster() {
@@ -175,11 +176,6 @@ public class SamlAuthenticationIT extends ESRestTestCase {
         return Settings.builder().put(ThreadContext.PREFIX + ".Authorization", token).build();
     }
 
-    /**
-     * We perform all requests to Elasticsearch as the "kibana_system" user, as this is the user that will be used
-     * in a typical SAML deployment (where Kibana is providing the UI for the SAML Web SSO interactions).
-     * Before we can use the Kibana user, we need to set its password to something we know.
-     */
     @Before
     public void setKibanaPassword() throws IOException {
         Request request = new Request("PUT", "/_security/user/kibana_system/_password");
@@ -187,11 +183,6 @@ public class SamlAuthenticationIT extends ESRestTestCase {
         adminClient().performRequest(request);
     }
 
-    /**
-     * This is a simple mapping that maps the "thor" user in the "shibboleth" realm to the "kibana_admin" role.
-     * We could do something more complex, but we have unit tests for role-mapping - this is just to verify that
-     * the mapping runs OK in a real environment.
-     */
     @Before
     public void setupRoleMapping() throws IOException {
         Request request = new Request("PUT", "/_security/role_mapping/thor-kibana");
@@ -210,7 +201,12 @@ public class SamlAuthenticationIT extends ESRestTestCase {
                     .endObject()
                     .startObject()
                     .startObject("field")
-                    .field("realm.name", "shibboleth")
+                    .field("realm.name", "microsoft_graph1")
+                    .endObject()
+                    .endObject()
+                    .startObject()
+                    .startObject("field")
+                    .field("groups", "group-id-3")
                     .endObject()
                     .endObject()
                     .endArray() // "all"
@@ -221,65 +217,9 @@ public class SamlAuthenticationIT extends ESRestTestCase {
         adminClient().performRequest(request);
     }
 
-    /**
-     * Create a native user for "thor" that is used for user-lookup (authorizing realms)
-     */
-    @Before
-    public void setupNativeUser() throws IOException {
-        final Map<String, Object> body = Map.ofEntries(
-            entry("roles", Collections.singletonList("kibana_admin")),
-            entry("full_name", "Thor Son of Odin"),
-            entry("password", randomAlphaOfLengthBetween(inFipsJvm() ? 14 : 8, 16)),
-            entry("metadata", Collections.singletonMap("is_native", true))
-        );
-        final Response response = adminClient().performRequest(buildRequest("PUT", "/_security/user/thor", body));
-        assertOK(response);
-    }
-
-    /**
-     * Tests that a user can login via a SAML idp:
-     * It uses:
-     * <ul>
-     * <li>A real IdP (Shibboleth, running locally)</li>
-     * <li>A fake web browser (apache http client)</li>
-     * <li>A fake "UI" ( same apache http client)</li>
-     * </ul>
-     * It takes the following steps:
-     * <ol>
-     * <li>Walks through the login process at the IdP</li>
-     * <li>Receives a JSON response that has a Bearer token</li>
-     * <li>Uses that token to verify the user details</li>
-     * </ol>
-     */
-    public void testLoginUserWithSamlRoleMapping() throws Exception {
+    public void testUserRoleMapping() throws Exception {
         final Tuple<String, String> authTokens = loginViaSaml("shibboleth");
         verifyElasticsearchAccessTokenForRoleMapping(authTokens.v1());
-        final Tuple<String, String> newAuthTokens = verifyElasticsearchRefreshToken(authTokens.v2());
-        final String accessToken = newAuthTokens.v1();
-        verifyElasticsearchAccessTokenForRoleMapping(accessToken);
-        logoutSaml(newAuthTokens);
-        verifyElasticsearchAccessTokenInvalidated(accessToken);
-    }
-
-    public void testLoginUserWithAuthorizingRealm() throws Exception {
-        final Tuple<String, String> authTokens = loginViaSaml("shibboleth_native");
-        verifyElasticsearchAccessTokenForAuthorizingRealms(authTokens.v1());
-        final Tuple<String, String> newAuthTokens = verifyElasticsearchRefreshToken(authTokens.v2());
-        final String accessToken = newAuthTokens.v1();
-        verifyElasticsearchAccessTokenForAuthorizingRealms(accessToken);
-        logoutSaml(newAuthTokens);
-        verifyElasticsearchAccessTokenInvalidated(accessToken);
-    }
-
-    public void testLoginWithWrongRealmFails() throws Exception {
-        final BasicHttpContext context = new BasicHttpContext();
-        try (CloseableHttpClient client = getHttpClient()) {
-            // this realm name comes from the config in build.gradle
-            final Tuple<URI, String> idAndLoginUri = getIdpLoginPage(client, context, "shibboleth_negative");
-            final URI consentUri = submitLoginForm(client, context, idAndLoginUri.v1());
-            final String samlResponse = submitConsentForm(context, client, consentUri);
-            submitSamlResponse(samlResponse, idAndLoginUri.v2(), "shibboleth", false);
-        }
     }
 
     private Tuple<String, String> loginViaSaml(String realmName) throws Exception {
@@ -321,33 +261,6 @@ public class SamlAuthenticationIT extends ESRestTestCase {
         assertThat(map.get("username"), equalTo("thor"));
         assertThat(map.get("full_name"), equalTo("Thor Odinson"));
         assertSingletonList(map.get("roles"), "kibana_admin");
-
-        assertThat(map.get("metadata"), instanceOf(Map.class));
-        final Map<?, ?> metadata = (Map<?, ?>) map.get("metadata");
-        assertSingletonList(metadata.get("saml_uid"), "thor");
-        assertSingletonList(metadata.get("saml(urn:oid:0.9.2342.19200300.100.1.1)"), "thor");
-        assertSingletonList(metadata.get("saml_displayName"), "Thor Odinson");
-        assertSingletonList(metadata.get("saml(urn:oid:2.5.4.3)"), "Thor Odinson");
-    }
-
-    /**
-     * Verifies that the provided "Access Token" (see org.elasticsearch.xpack.security.authc.TokenService)
-     * is for the expected user with the expected name and roles if the user was retrieved from the native realm
-     */
-    private void verifyElasticsearchAccessTokenForAuthorizingRealms(String accessToken) throws IOException {
-        final Map<String, Object> map = callAuthenticateApiUsingAccessToken(accessToken);
-        assertThat(map.get("username"), equalTo("thor"));
-        assertThat(map.get("full_name"), equalTo("Thor Son of Odin"));
-        assertSingletonList(map.get("roles"), "kibana_admin");
-
-        assertThat(map.get("metadata"), instanceOf(Map.class));
-        final Map<?, ?> metadata = (Map<?, ?>) map.get("metadata");
-        assertThat(metadata.get("is_native"), equalTo(true));
-    }
-
-    private void verifyElasticsearchAccessTokenInvalidated(String accessToken) {
-        var e = expectThrows(ResponseException.class, () -> callAuthenticateApiUsingAccessToken(accessToken));
-        assertThat(e.getMessage(), containsString("The access token expired"));
     }
 
     private Map<String, Object> callAuthenticateApiUsingAccessToken(String accessToken) throws IOException {
@@ -356,22 +269,6 @@ public class SamlAuthenticationIT extends ESRestTestCase {
         options.addHeader("Authorization", "Bearer " + accessToken);
         request.setOptions(options);
         return entityAsMap(client().performRequest(request));
-    }
-
-    private Tuple<String, String> verifyElasticsearchRefreshToken(String refreshToken) throws IOException {
-        final Map<String, ?> body = Map.of("grant_type", "refresh_token", "refresh_token", refreshToken);
-        final Response response = client().performRequest(buildRequest("POST", "/_security/oauth2/token", body, kibanaAuth()));
-        assertOK(response);
-
-        final Map<String, Object> result = entityAsMap(response);
-        final Object newRefreshToken = result.get("refresh_token");
-        assertThat(newRefreshToken, notNullValue());
-        assertThat(newRefreshToken, instanceOf(String.class));
-
-        final Object accessToken = result.get("access_token");
-        assertThat(accessToken, notNullValue());
-        assertThat(accessToken, instanceOf(String.class));
-        return Tuple.tuple((String) accessToken, (String) newRefreshToken);
     }
 
     /**
@@ -472,13 +369,6 @@ public class SamlAuthenticationIT extends ESRestTestCase {
         }
     }
 
-    private Map<String, Object> logoutSaml(final Tuple<String, String> authTokens) throws IOException {
-        final Map<String, Object> body = Map.of("token", authTokens.v1(), "refresh_token", authTokens.v2());
-        final Response response = client().performRequest(buildRequest("POST", "/_security/saml/logout", body, kibanaAuth()));
-        assertHttpOk(response.getStatusLine());
-        return parseResponseAsMap(response.getEntity());
-    }
-
     /**
      * Finds the target URL for the HTML form within the provided content.
      */
@@ -575,5 +465,4 @@ public class SamlAuthenticationIT extends ESRestTestCase {
         context.init(new KeyManager[0], new TrustManager[] { trustManager }, new SecureRandom());
         return context;
     }
-
 }

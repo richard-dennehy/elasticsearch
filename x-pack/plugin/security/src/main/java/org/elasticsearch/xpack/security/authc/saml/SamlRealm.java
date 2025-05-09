@@ -12,13 +12,8 @@ import net.shibboleth.utilities.java.support.resolver.ResolverException;
 import net.shibboleth.utilities.java.support.xml.BasicParserPool;
 
 import org.apache.http.client.HttpClient;
-import org.apache.http.client.entity.UrlEncodedFormEntity;
-import org.apache.http.client.methods.HttpGet;
-import org.apache.http.client.methods.HttpPost;
 import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
-import org.apache.http.impl.client.BasicResponseHandler;
 import org.apache.http.impl.client.HttpClientBuilder;
-import org.apache.http.message.BasicNameValuePair;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.elasticsearch.ElasticsearchSecurityException;
@@ -40,7 +35,6 @@ import org.elasticsearch.core.SuppressForbidden;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.core.Tuple;
 import org.elasticsearch.license.XPackLicenseState;
-import org.elasticsearch.nimbus.jose.util.JSONObjectUtils;
 import org.elasticsearch.watcher.FileChangesListener;
 import org.elasticsearch.watcher.FileWatcher;
 import org.elasticsearch.watcher.ResourceWatcherService;
@@ -87,14 +81,12 @@ import org.opensaml.xmlsec.keyinfo.impl.KeyInfoResolutionContext;
 import org.opensaml.xmlsec.keyinfo.impl.provider.InlineX509DataProvider;
 
 import java.io.IOException;
-import java.net.URI;
 import java.nio.file.Path;
 import java.security.AccessController;
 import java.security.GeneralSecurityException;
 import java.security.PrivilegedActionException;
 import java.security.PrivilegedExceptionAction;
 import java.security.PublicKey;
-import java.text.ParseException;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -193,8 +185,6 @@ public final class SamlRealm extends Realm implements Releasable {
 
     private DelegatedAuthorizationSupport delegatedRealms;
 
-    private SSLService sslService;
-
     /**
      * Factory for SAML realm.
      * This is not a constructor as it needs to initialise a number of components before delegating to
@@ -246,8 +236,7 @@ public final class SamlRealm extends Realm implements Releasable {
             logoutResponseHandler,
             idpDescriptor,
             serviceProvider,
-            userAttributeNameConfiguration,
-            sslService
+            userAttributeNameConfiguration
         );
 
         // the metadata resolver needs to be destroyed since it runs a timer task in the background and destroying stops it!
@@ -269,20 +258,9 @@ public final class SamlRealm extends Realm implements Releasable {
         SamlLogoutResponseHandler logoutResponseHandler,
         Supplier<EntityDescriptor> idpDescriptor,
         SpConfiguration spConfiguration,
-        SamlRealmSettings.UserAttributeNameConfiguration userAttributeNameConfiguration,
-        SSLService sslService
+        SamlRealmSettings.UserAttributeNameConfiguration userAttributeNameConfiguration
     ) throws Exception {
         super(config);
-
-        if (config.hasSetting(SamlRealmSettings.AZURE_CLIENT_ID)) {
-            logger.warn(
-                "client id {}; client secret {}",
-                config.getSetting(SamlRealmSettings.AZURE_CLIENT_ID),
-                config.getSetting(SamlRealmSettings.AZURE_CLIENT_SECRET)
-            );
-        } else {
-            logger.warn("No Azure client credentials configured");
-        }
 
         if (config.hasSetting(SamlRealmSettings.EXCLUDE_ROLES)) {
             this.roleMapper = new ExcludingRoleMapper(roleMapper, config.getSetting(SamlRealmSettings.EXCLUDE_ROLES));
@@ -313,7 +291,6 @@ public final class SamlRealm extends Realm implements Releasable {
         this.mailAttribute = AttributeParser.forSetting(logger, MAIL_ATTRIBUTE, config, false);
 
         this.releasables = new ArrayList<>();
-        this.sslService = sslService;
     }
 
     @Override
@@ -629,103 +606,17 @@ public final class SamlRealm extends Realm implements Releasable {
         }
         final Map<String, Object> userMeta = Map.copyOf(userMetaBuilder);
 
-        final var graphGroups = doMicrosoftGraphStuff(principal);
-
         final List<String> groups = groupsAttribute.getAttribute(attributes);
-        graphGroups.addAll(groups);
-
         final String dn = resolveSingleValueAttribute(attributes, dnAttribute, userAttributeNameConfiguration.dn());
         final String name = resolveSingleValueAttribute(attributes, nameAttribute, userAttributeNameConfiguration.name());
         final String mail = resolveSingleValueAttribute(attributes, mailAttribute, userAttributeNameConfiguration.mail());
-        UserRoleMapper.UserData userData = new UserRoleMapper.UserData(principal, dn, graphGroups, userMeta, config);
+        UserRoleMapper.UserData userData = new UserRoleMapper.UserData(principal, dn, groups, userMeta, config);
         logger.debug("SAML attribute mapping = [{}]", userData);
         roleMapper.resolveRoles(userData, wrappedListener.delegateFailureAndWrap((l, roles) -> {
             final User user = new User(principal, roles.toArray(new String[roles.size()]), name, mail, userMeta, true);
             logger.debug("SAML user = [{}]", user);
             l.onResponse(AuthenticationResult.success(user));
         }));
-    }
-
-    private List<String> doMicrosoftGraphStuff(String principal) {
-        // stolen from `parseHttpMetadata`
-        HttpClientBuilder builder = HttpClientBuilder.create();
-        // ssl setup
-        final String sslKey = RealmSettings.realmSslPrefix(config.identifier());
-        final SslConfiguration sslConfiguration = sslService.getSSLConfiguration(sslKey);
-        final HostnameVerifier verifier = SSLService.getHostnameVerifier(sslConfiguration);
-        SSLConnectionSocketFactory factory = new SSLConnectionSocketFactory(sslService.sslSocketFactory(sslConfiguration), verifier);
-        builder.setSSLSocketFactory(factory);
-
-        try (var client = builder.build()) {
-            var authenticate = new HttpPost(
-                Strings.format(
-                    "%s/%s/oauth2/v2.0/token",
-                    config.getSetting(SamlRealmSettings.AZURE_ACCESS_TOKEN_HOST),
-                    config.getSetting(SamlRealmSettings.AZURE_TENANT_ID)
-                )
-            );
-            authenticate.setEntity(
-                new UrlEncodedFormEntity(
-                    List.of(
-                        new BasicNameValuePair("grant_type", "client_credentials"),
-                        new BasicNameValuePair("scope", "https://graph.microsoft.com/.default"),
-                        new BasicNameValuePair("client_id", config.getSetting(SamlRealmSettings.AZURE_CLIENT_ID)),
-                        new BasicNameValuePair("client_secret", config.getSetting(SamlRealmSettings.AZURE_CLIENT_SECRET))
-                    )
-                )
-            );
-            logger.trace("getting bearer token from {}", authenticate.getURI());
-            var response = client.execute(authenticate, new BasicResponseHandler());
-            var json = JSONObjectUtils.parse(response);
-            var bearer = json.get("access_token");
-            logger.trace("Azure access token [{}]", bearer);
-
-            var getGroupMembership = new HttpGet(
-                Strings.format(
-                    "%s/v1.0/users/%s/memberOf/microsoft.graph.group?$select=id&$top=999",
-                    config.getSetting(SamlRealmSettings.AZURE_MS_GRAPH_HOST),
-                    principal
-                )
-            );
-            getGroupMembership.addHeader("Authorization", "Bearer " + bearer);
-            logger.trace("getting group membership from {}", getGroupMembership.getURI());
-            response = client.execute(getGroupMembership, new BasicResponseHandler());
-
-            var groupMembership = parseGroupMembershipResponse(response);
-            var nextPage = groupMembership.v1();
-            var groups = new ArrayList<>(groupMembership.v2());
-
-            while (nextPage != null) {
-                getGroupMembership.setURI(new URI(nextPage));
-                logger.trace("getting group membership from {}", getGroupMembership.getURI());
-                response = client.execute(getGroupMembership, new BasicResponseHandler());
-
-                groupMembership = parseGroupMembershipResponse(response);
-                nextPage = groupMembership.v1();
-                groups.addAll(groupMembership.v2());
-            }
-
-            logger.trace("Got {} groups from Graph {}", groups.size(), String.join(", ", groups));
-            return groups;
-        } catch (Exception e) {
-            logger.error("Error while authenticating user", e);
-            throw new RuntimeException(e);
-        }
-    }
-
-    private Tuple<String, List<String>> parseGroupMembershipResponse(String response) throws ParseException {
-        var json = JSONObjectUtils.parse(response);
-
-        var nextLink = (String) json.get("@odata.nextLink");
-        var groups = ((List<?>) json.get("value")).stream().map(group -> {
-            if (group instanceof Map<?, ?> m) {
-                return (String) m.get("id");
-            } else {
-                return null;
-            }
-        }).toList();
-
-        return Tuple.tuple(nextLink, groups);
     }
 
     public Map<String, Object> createTokenMetadata(SamlNameId nameId, String session) {
