@@ -26,26 +26,26 @@ public class MicrosoftGraphAuthzRealmSettings {
 
     public static final Setting.AffixSetting<String> CLIENT_SECRET = RealmSettings.simpleString(
         REALM_TYPE,
-        "azure.client_secret",
+        "client_secret",
         Setting.Property.NodeScope
     );
 
     public static final Setting.AffixSetting<String> TENANT_ID = RealmSettings.simpleString(
         REALM_TYPE,
-        "azure.tenant_id",
+        "tenant_id",
         Setting.Property.NodeScope
     );
 
     public static final Setting.AffixSetting<String> ACCESS_TOKEN_HOST = Setting.affixKeySetting(
         RealmSettings.realmSettingPrefix(REALM_TYPE),
-        "azure.access_token_host",
-        key -> Setting.simpleString(key, "https://login.microsoftonline.com/", Setting.Property.NodeScope)
+        "access_token_host",
+        key -> Setting.simpleString(key, "https://login.microsoftonline.com", Setting.Property.NodeScope)
     );
 
     public static final Setting.AffixSetting<String> API_HOST = Setting.affixKeySetting(
         RealmSettings.realmSettingPrefix(REALM_TYPE),
-        "azure.graph_host",
-        key -> Setting.simpleString(key, "https://graph.microsoft.com/", Setting.Property.NodeScope)
+        "graph_host",
+        key -> Setting.simpleString(key, "https://graph.microsoft.com", Setting.Property.NodeScope)
     );
 
     public static List<Setting<?>> getSettings() {
