@@ -19,11 +19,4 @@ esplugin {
 dependencies {
   compileOnly project(":x-pack:plugin:core")
   compileOnly "com.nimbusds:nimbus-jose-jwt:10.0.2"
-
-  javaRestTestImplementation testArtifact(project(':x-pack:plugin:core'))
-  javaRestTestImplementation project(":x-pack:test:idp-fixture")
-}
-
-tasks.named("javaRestTest").configure {
-  usesDefaultDistribution("to be triaged")
 }

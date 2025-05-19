@@ -5,7 +5,7 @@
  * 2.0.
  */
 
-package org.elasticsearch.plugin.security.authz;
+package org.elasticsearch.xpack.security.authz.microsoft;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
