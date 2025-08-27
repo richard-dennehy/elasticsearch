@@ -13,6 +13,7 @@ import org.elasticsearch.ElasticsearchSecurityException;
 import org.elasticsearch.common.util.NamedFormatter;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.core.Tuple;
+import org.elasticsearch.core.XmlUtils;
 import org.elasticsearch.test.MockLog;
 import org.elasticsearch.xpack.core.watcher.watch.ClockMock;
 import org.hamcrest.Matchers;
@@ -1484,7 +1485,7 @@ public class SamlAuthenticatorTests extends SamlResponseHandlerTests {
     }
 
     private Response toResponse(String xml) throws SAXException, IOException, ParserConfigurationException {
-        final DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+        final DocumentBuilderFactory dbf = XmlUtils.getHardenedBuilderFactory();
         dbf.setNamespaceAware(true);
         final Document doc = dbf.newDocumentBuilder().parse(new InputSource(new StringReader(xml)));
         return authenticator.buildXmlObject(doc.getDocumentElement(), Response.class);
