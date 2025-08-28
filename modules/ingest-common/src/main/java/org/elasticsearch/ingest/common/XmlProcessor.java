@@ -11,6 +11,7 @@ package org.elasticsearch.ingest.common;
 
 import org.elasticsearch.cluster.metadata.ProjectId;
 import org.elasticsearch.common.Strings;
+import org.elasticsearch.core.XmlUtils;
 import org.elasticsearch.ingest.AbstractProcessor;
 import org.elasticsearch.ingest.ConfigurationUtils;
 import org.elasticsearch.ingest.IngestDocument;
@@ -32,6 +33,7 @@ import java.util.regex.Pattern;
 import javax.xml.namespace.NamespaceContext;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
 import javax.xml.parsers.SAXParser;
 import javax.xml.parsers.SAXParserFactory;
 import javax.xml.xpath.XPath;
@@ -808,22 +810,14 @@ public final class XmlProcessor extends AbstractProcessor {
      * This factory is configured to prevent XXE attacks with SAX-specific features.
      */
     private static SAXParserFactory createSecureSaxParserFactory() {
-        SAXParserFactory factory = SAXParserFactory.newInstance();
-        factory.setValidating(false);
-
-        // Configure SAX-specific security features to prevent XXE attacks
         try {
-            // SAX parser features - these are the correct features for SAXParserFactory
-            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
-            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
-            factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
-            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            var factory = XmlUtils.getHardenedSaxParserFactory();
+            factory.setValidating(false);
+            return factory;
         } catch (Exception e) {
             // Security features are critical - fail if they cannot be set
             throw new IllegalStateException("Cannot configure secure XML parsing features", e);
         }
-
-        return factory;
     }
 
     /**
@@ -831,22 +825,8 @@ public final class XmlProcessor extends AbstractProcessor {
      * This factory is configured to prevent XXE attacks and has namespace awareness enabled.
      */
     private static SAXParserFactory createSecureSaxParserFactoryNamespaceAware() {
-        SAXParserFactory factory = SAXParserFactory.newInstance();
-        factory.setValidating(false);
+        SAXParserFactory factory = createSecureSaxParserFactory();
         factory.setNamespaceAware(true);
-
-        // Configure SAX-specific security features to prevent XXE attacks
-        try {
-            // SAX parser features - these are the correct features for SAXParserFactory
-            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
-            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
-            factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
-            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
-        } catch (Exception e) {
-            // Security features are critical - fail if they cannot be set
-            throw new IllegalStateException("Cannot configure secure XML parsing features", e);
-        }
-
         return factory;
     }
 
@@ -855,29 +835,22 @@ public final class XmlProcessor extends AbstractProcessor {
      * This factory is configured to prevent XXE attacks and has strict validation enabled.
      */
     private static SAXParserFactory createSecureSaxParserFactoryStrict() {
-        SAXParserFactory factory = SAXParserFactory.newInstance();
-        factory.setValidating(false);
-
-        // Configure SAX-specific security features to prevent XXE attacks
         try {
-            // SAX parser features - these are the correct features for SAXParserFactory
-            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
-            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
-            factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
-            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            var factory = XmlUtils.getHardenedSaxParserFactory();
+            factory.setValidating(false);
+
+            // Try to enable strict parsing features (optional - may not be supported)
+            try {
+                factory.setFeature("http://apache.org/xml/features/validation/check-full-element-content", true);
+            } catch (Exception e) {
+                // Strict parsing features are optional - continue without them if not supported
+            }
+
+            return factory;
         } catch (Exception e) {
             // Security features are critical - fail if they cannot be set
             throw new IllegalStateException("Cannot configure secure XML parsing features", e);
         }
-
-        // Try to enable strict parsing features (optional - may not be supported)
-        try {
-            factory.setFeature("http://apache.org/xml/features/validation/check-full-element-content", true);
-        } catch (Exception e) {
-            // Strict parsing features are optional - continue without them if not supported
-        }
-
-        return factory;
     }
 
     /**
@@ -885,29 +858,8 @@ public final class XmlProcessor extends AbstractProcessor {
      * This factory is configured to prevent XXE attacks, has namespace awareness enabled, and strict validation.
      */
     private static SAXParserFactory createSecureSaxParserFactoryNamespaceAwareStrict() {
-        SAXParserFactory factory = SAXParserFactory.newInstance();
-        factory.setValidating(false);
+        var factory = createSecureSaxParserFactoryStrict();
         factory.setNamespaceAware(true);
-
-        // Configure SAX-specific security features to prevent XXE attacks
-        try {
-            // SAX parser features - these are the correct features for SAXParserFactory
-            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
-            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
-            factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
-            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
-        } catch (Exception e) {
-            // Security features are critical - fail if they cannot be set
-            throw new IllegalStateException("Cannot configure secure XML parsing features", e);
-        }
-
-        // Try to enable strict parsing features (optional - may not be supported)
-        try {
-            factory.setFeature("http://apache.org/xml/features/validation/check-full-element-content", true);
-        } catch (Exception e) {
-            // Strict parsing features are optional - continue without them if not supported
-        }
-
         return factory;
     }
 
@@ -918,14 +870,14 @@ public final class XmlProcessor extends AbstractProcessor {
      * The SAX parser handles all XML parsing with appropriate security measures.
      */
     private static DocumentBuilderFactory createSecureDocumentBuilderFactory() {
-        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-        factory.setNamespaceAware(true);  // Enable for maximum compatibility
-        factory.setValidating(false);
-
-        // No XXE security features needed - we only create empty documents,
-        // never parse XML with this factory
-
-        return factory;
+        try {
+            DocumentBuilderFactory factory = XmlUtils.getHardenedBuilderFactory();
+            factory.setNamespaceAware(true);  // Enable for maximum compatibility
+            factory.setValidating(false);
+            return factory;
+        } catch (ParserConfigurationException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     /**
