@@ -307,7 +307,8 @@ public class Transform extends Plugin implements SystemIndexPlugin, PersistentTa
             settings,
             services.linkedProjectConfigService(),
             configManager,
-            auditor
+            auditor,
+            getTransformExtension().getCloudApiKeyService()
         );
         TransformScheduler scheduler = new TransformScheduler(
             clock,
@@ -338,7 +339,8 @@ public class Transform extends Plugin implements SystemIndexPlugin, PersistentTa
                 transformNode,
                 crossProjectModeDecider,
                 hasLinkedProjects,
-                services.projectResolver()
+                services.projectResolver(),
+                transformExtension.getCloudApiKeyService()
             )
         );
 

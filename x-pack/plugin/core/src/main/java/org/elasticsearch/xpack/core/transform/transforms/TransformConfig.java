@@ -13,6 +13,7 @@ import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Writeable;
+import org.elasticsearch.common.settings.SecureString;
 import org.elasticsearch.common.util.FeatureFlag;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.core.TimeValue;
@@ -29,6 +30,7 @@ import org.elasticsearch.xpack.core.common.time.TimeUtils;
 import org.elasticsearch.xpack.core.common.validation.SourceDestValidator.SourceDestValidation;
 import org.elasticsearch.xpack.core.deprecation.DeprecationIssue;
 import org.elasticsearch.xpack.core.deprecation.DeprecationIssue.Level;
+import org.elasticsearch.xpack.core.security.cloud.CloudCredential;
 import org.elasticsearch.xpack.core.security.xcontent.XContentUtils;
 import org.elasticsearch.xpack.core.transform.TransformConfigVersion;
 import org.elasticsearch.xpack.core.transform.TransformDeprecations;
@@ -64,6 +66,7 @@ public final class TransformConfig implements SimpleDiffable<TransformConfig>, W
     public static final TransformConfigVersion CONFIG_VERSION_LAST_DEFAULTS_CHANGED = TransformConfigVersion.V_7_15_0;
     public static final String NAME = "data_frame_transform_config";
     public static final ParseField HEADERS = new ParseField("headers");
+    public static final ParseField CLOUD_MANAGED_CREDENTIAL = new ParseField("cloud_managed_credential");
 
     public static final FeatureFlag TRANSFORM_CROSS_PROJECT = new FeatureFlag("transform_cross_project");
 
@@ -101,6 +104,8 @@ public final class TransformConfig implements SimpleDiffable<TransformConfig>, W
     private Map<String, String> headers;
     private TransformConfigVersion transformVersion;
     private Instant createTime;
+    @Nullable
+    private CloudCredential cloudManagedCredential;
 
     private final PivotConfig pivotConfig;
     private final LatestConfig latestConfig;
@@ -208,6 +213,13 @@ public final class TransformConfig implements SimpleDiffable<TransformConfig>, W
             ObjectParser.ValueType.VALUE
         );
         parser.declareString(optionalConstructorArg(), TransformField.VERSION);
+        if (lenient) {
+            parser.declareString(
+                TransformConfig::setCloudManagedCredential,
+                str -> new CloudCredential(new SecureString(str.toCharArray())),
+                CLOUD_MANAGED_CREDENTIAL
+            );
+        }
         return parser;
     }
 
@@ -312,6 +324,16 @@ public final class TransformConfig implements SimpleDiffable<TransformConfig>, W
     public TransformConfig setCreateTime(Instant createTime) {
         ExceptionsHelper.requireNonNull(createTime, TransformField.CREATE_TIME.getPreferredName());
         this.createTime = Instant.ofEpochMilli(createTime.toEpochMilli());
+        return this;
+    }
+
+    @Nullable
+    public CloudCredential getCloudManagedCredential() {
+        return cloudManagedCredential;
+    }
+
+    public TransformConfig setCloudManagedCredential(@Nullable CloudCredential cloudManagedCredential) {
+        this.cloudManagedCredential = cloudManagedCredential;
         return this;
     }
 
@@ -487,6 +509,9 @@ public final class TransformConfig implements SimpleDiffable<TransformConfig>, W
             }
             if (forInternalStorage) {
                 builder.field(TransformField.INDEX_DOC_TYPE.getPreferredName(), NAME);
+                if (cloudManagedCredential != null) {
+                    builder.field(CLOUD_MANAGED_CREDENTIAL.getPreferredName(), cloudManagedCredential.value().toString());
+                }
             }
         }
         builder.field(TransformField.SOURCE.getPreferredName(), source, params);
@@ -539,6 +564,7 @@ public final class TransformConfig implements SimpleDiffable<TransformConfig>, W
             && Objects.equals(this.frequency, that.frequency)
             && Objects.equals(this.syncConfig, that.syncConfig)
             && Objects.equals(this.headers, that.headers)
+            && Objects.equals(this.cloudManagedCredential, that.cloudManagedCredential)
             && Objects.equals(this.pivotConfig, that.pivotConfig)
             && Objects.equals(this.latestConfig, that.latestConfig)
             && Objects.equals(this.description, that.description)
@@ -558,6 +584,7 @@ public final class TransformConfig implements SimpleDiffable<TransformConfig>, W
             frequency,
             syncConfig,
             headers,
+            cloudManagedCredential,
             pivotConfig,
             latestConfig,
             description,
@@ -698,6 +725,7 @@ public final class TransformConfig implements SimpleDiffable<TransformConfig>, W
         private Map<String, String> headers;
         private TransformConfigVersion transformVersion;
         private Instant createTime;
+        private CloudCredential cloudManagedCredential;
         private PivotConfig pivotConfig;
         private LatestConfig latestConfig;
         private SettingsConfig settings;
@@ -835,6 +863,11 @@ public final class TransformConfig implements SimpleDiffable<TransformConfig>, W
             return this;
         }
 
+        public Builder setCloudManagedCredential(CloudCredential cloudManagedCredential) {
+            this.cloudManagedCredential = cloudManagedCredential;
+            return this;
+        }
+
         public TransformConfig build() {
             return new TransformConfig(
                 id,
@@ -851,7 +884,7 @@ public final class TransformConfig implements SimpleDiffable<TransformConfig>, W
                 retentionPolicyConfig,
                 createTime,
                 transformVersion == null ? null : transformVersion.toString()
-            );
+            ).setCloudManagedCredential(cloudManagedCredential);
         }
 
         @Override

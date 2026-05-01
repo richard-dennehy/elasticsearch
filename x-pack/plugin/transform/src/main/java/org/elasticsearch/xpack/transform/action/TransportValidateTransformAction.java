@@ -28,6 +28,7 @@ import org.elasticsearch.tasks.Task;
 import org.elasticsearch.tasks.TaskId;
 import org.elasticsearch.transport.TransportService;
 import org.elasticsearch.xpack.core.common.validation.SourceDestValidator;
+import org.elasticsearch.xpack.core.security.cloud.InternalCloudApiKeyService;
 import org.elasticsearch.xpack.core.transform.TransformDeprecations;
 import org.elasticsearch.xpack.core.transform.TransformMessages;
 import org.elasticsearch.xpack.core.transform.action.ValidateTransformAction;
@@ -48,6 +49,7 @@ public class TransportValidateTransformAction extends HandledTransportAction<Req
     private final ClusterService clusterService;
     private final TransportService transportService;
     private final Settings nodeSettings;
+    private final InternalCloudApiKeyService cloudApiKeyService;
     private final SourceDestValidator sourceDestValidator;
     private final CrossProjectModeDecider crossProjectModeDecider;
 
@@ -67,6 +69,7 @@ public class TransportValidateTransformAction extends HandledTransportAction<Req
         this.clusterService = clusterService;
         this.transportService = transportService;
         this.nodeSettings = settings;
+        this.cloudApiKeyService = transformServices.cloudApiKeyService();
         this.sourceDestValidator = new SourceDestValidator(
             indexNameExpressionResolver,
             transportService.getRemoteClusterService(),
@@ -104,6 +107,7 @@ public class TransportValidateTransformAction extends HandledTransportAction<Req
         TransformNodes.warnIfNoTransformNodes(clusterState);
 
         var config = request.getConfig();
+        logger.info("Validate Transform cloud credentials {}", config.getCloudManagedCredential());
         var function = FunctionFactory.create(config);
         var parentTaskId = new TaskId(clusterService.localNode().getId(), task.getId());
         var parentClient = new ParentTaskAssigningClient(client, parentTaskId);
@@ -136,7 +140,15 @@ public class TransportValidateTransformAction extends HandledTransportAction<Req
             if (request.isDeferValidation()) {
                 deduceMappingsListener.onResponse(emptyMap());
             } else {
-                function.deduceMappings(parentClient, config.getHeaders(), config.getId(), config.getSource(), deduceMappingsListener);
+                function.deduceMappings(
+                    parentClient,
+                    config.getHeaders(),
+                    config.getId(),
+                    config.getSource(),
+                    cloudApiKeyService,
+                    config.getCloudManagedCredential(),
+                    deduceMappingsListener
+                );
             }
         }, listener::onFailure);
 
@@ -145,7 +157,15 @@ public class TransportValidateTransformAction extends HandledTransportAction<Req
             if (request.isDeferValidation()) {
                 l.onResponse(true);
             } else {
-                function.validateQuery(parentClient, config.getHeaders(), config.getSource(), request.ackTimeout(), l);
+                function.validateQuery(
+                    parentClient,
+                    config.getHeaders(),
+                    config.getSource(),
+                    request.ackTimeout(),
+                    cloudApiKeyService,
+                    config.getCloudManagedCredential(),
+                    l
+                );
             }
         });
 

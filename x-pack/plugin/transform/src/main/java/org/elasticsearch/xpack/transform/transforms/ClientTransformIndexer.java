@@ -51,6 +51,8 @@ import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.ActionNotFoundTransportException;
 import org.elasticsearch.xpack.core.ClientHelper;
 import org.elasticsearch.xpack.core.indexing.IndexerState;
+import org.elasticsearch.xpack.core.security.cloud.CloudCredentialClientHelper;
+import org.elasticsearch.xpack.core.security.cloud.InternalCloudApiKeyService;
 import org.elasticsearch.xpack.core.transform.TransformMetadata;
 import org.elasticsearch.xpack.core.transform.action.ValidateTransformAction;
 import org.elasticsearch.xpack.core.transform.transforms.SettingsConfig;
@@ -96,6 +98,7 @@ class ClientTransformIndexer extends TransformIndexer {
     private final boolean crossProjectEnabled;
     private final Function<ProjectId, Boolean> hasLinkedProjects;
     private final AtomicBoolean oldStatsCleanedUp = new AtomicBoolean(false);
+    private final InternalCloudApiKeyService cloudApiKeyService;
 
     private final AtomicReference<SeqNoPrimaryTermAndIndex> seqNoPrimaryTermAndIndexHolder;
     private final ConcurrentHashMap<String, PointInTimeBuilder> namedPits = new ConcurrentHashMap<>();
@@ -139,6 +142,7 @@ class ClientTransformIndexer extends TransformIndexer {
         this.indexNameExpressionResolver = indexNameExpressionResolver;
         this.destIndexSettings = transformExtension.getTransformDestinationIndexSettings();
         this.seqNoPrimaryTermAndIndexHolder = new AtomicReference<>(seqNoPrimaryTermAndIndex);
+        this.cloudApiKeyService = transformServices.cloudApiKeyService();
 
         // TODO: move into context constructor
         context.setShouldStopAtCheckpoint(shouldStopAtCheckpoint);
@@ -184,12 +188,14 @@ class ClientTransformIndexer extends TransformIndexer {
             nextPhase.onFailure(new ElasticsearchException("Attempted to do a bulk index request for failed transform [{}].", getJobId()));
             return;
         }
-        ClientHelper.executeWithHeadersAsync(
+        CloudCredentialClientHelper.executeWithHeadersAsync(
             transformConfig.getHeaders(),
             ClientHelper.TRANSFORM_ORIGIN,
             client,
             TransportBulkAction.TYPE,
             request,
+            cloudApiKeyService,
+            transformConfig.getCloudManagedCredential(),
             ActionListener.wrap(bulkResponse -> handleBulkResponse(bulkResponse, nextPhase), nextPhase::onFailure)
         );
     }
@@ -264,12 +270,14 @@ class ClientTransformIndexer extends TransformIndexer {
 
     @Override
     protected void doDeleteByQuery(DeleteByQueryRequest deleteByQueryRequest, ActionListener<BulkByScrollResponse> responseListener) {
-        ClientHelper.executeWithHeadersAsync(
+        CloudCredentialClientHelper.executeWithHeadersAsync(
             transformConfig.getHeaders(),
             ClientHelper.TRANSFORM_ORIGIN,
             client,
             DeleteByQueryAction.INSTANCE,
             deleteByQueryRequest,
+            cloudApiKeyService,
+            transformConfig.getCloudManagedCredential(),
             responseListener
         );
     }
@@ -305,12 +313,14 @@ class ClientTransformIndexer extends TransformIndexer {
 
     @Override
     void doGetInitialProgress(SearchRequest request, ActionListener<SearchResponse> responseListener) {
-        ClientHelper.executeWithHeadersAsync(
+        CloudCredentialClientHelper.executeWithHeadersAsync(
             transformConfig.getHeaders(),
             ClientHelper.TRANSFORM_ORIGIN,
             client,
             TransportSearchAction.TYPE,
             request,
+            cloudApiKeyService,
+            transformConfig.getCloudManagedCredential(),
             responseListener
         );
     }
@@ -526,12 +536,14 @@ class ClientTransformIndexer extends TransformIndexer {
         BytesReference oldPit = pit.getEncodedId();
 
         ClosePointInTimeRequest closePitRequest = new ClosePointInTimeRequest(oldPit);
-        ClientHelper.executeWithHeadersAsync(
+        CloudCredentialClientHelper.executeWithHeadersAsync(
             transformConfig.getHeaders(),
             ClientHelper.TRANSFORM_ORIGIN,
             client,
             TransportClosePointInTimeAction.TYPE,
             closePitRequest,
+            cloudApiKeyService,
+            transformConfig.getCloudManagedCredential(),
             ActionListener.runAfter(ActionListener.wrap(response -> {
                 logger.trace("[{}] closed pit search context [{}]", getJobId(), oldPit);
             }, e -> {
@@ -571,12 +583,14 @@ class ClientTransformIndexer extends TransformIndexer {
             pitRequest.indexFilter(transformConfig.getSource().getQueryConfig().getQuery());
         }
 
-        ClientHelper.executeWithHeadersAsync(
+        CloudCredentialClientHelper.executeWithHeadersAsync(
             transformConfig.getHeaders(),
             ClientHelper.TRANSFORM_ORIGIN,
             client,
             TransportOpenPointInTimeAction.TYPE,
             pitRequest,
+            cloudApiKeyService,
+            transformConfig.getCloudManagedCredential(),
             ActionListener.wrap(response -> {
                 PointInTimeBuilder newPit = new PointInTimeBuilder(response.getPointInTimeId()).setKeepAlive(PIT_KEEP_ALIVE);
                 namedPits.put(namedSearchRequest.v1(), newPit);
@@ -641,12 +655,14 @@ class ClientTransformIndexer extends TransformIndexer {
         }
         logger.trace("searchRequest: [{}]", searchRequest);
 
-        ClientHelper.executeWithHeadersAsync(
+        CloudCredentialClientHelper.executeWithHeadersAsync(
             transformConfig.getHeaders(),
             ClientHelper.TRANSFORM_ORIGIN,
             client,
             TransportSearchAction.TYPE,
             searchRequest,
+            cloudApiKeyService,
+            transformConfig.getCloudManagedCredential(),
             ActionListener.wrap(response -> {
                 // did the pit change?
                 if (response.pointInTimeId() != null && (pit == null || response.pointInTimeId().equals(pit.getEncodedId())) == false) {
@@ -667,12 +683,14 @@ class ClientTransformIndexer extends TransformIndexer {
                     );
                     namedPits.remove(name);
                     originalRequest.source().pointInTimeBuilder(null);
-                    ClientHelper.executeWithHeadersAsync(
+                    CloudCredentialClientHelper.executeWithHeadersAsync(
                         transformConfig.getHeaders(),
                         ClientHelper.TRANSFORM_ORIGIN,
                         client,
                         TransportSearchAction.TYPE,
                         originalRequest,
+                        cloudApiKeyService,
+                        transformConfig.getCloudManagedCredential(),
                         listener
                     );
                     return;
@@ -686,12 +704,14 @@ class ClientTransformIndexer extends TransformIndexer {
                      */
                     namedPits.remove(name);
                     originalRequest.source().pointInTimeBuilder(null);
-                    ClientHelper.executeWithHeadersAsync(
+                    CloudCredentialClientHelper.executeWithHeadersAsync(
                         transformConfig.getHeaders(),
                         ClientHelper.TRANSFORM_ORIGIN,
                         client,
                         TransportSearchAction.TYPE,
                         originalRequest,
+                        cloudApiKeyService,
+                        transformConfig.getCloudManagedCredential(),
                         listener
                     );
                     return;

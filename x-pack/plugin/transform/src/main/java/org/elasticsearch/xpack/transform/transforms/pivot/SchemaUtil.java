@@ -22,6 +22,9 @@ import org.elasticsearch.index.mapper.NumberFieldMapper;
 import org.elasticsearch.search.aggregations.AggregationBuilder;
 import org.elasticsearch.search.aggregations.PipelineAggregationBuilder;
 import org.elasticsearch.xpack.core.ClientHelper;
+import org.elasticsearch.xpack.core.security.cloud.CloudCredential;
+import org.elasticsearch.xpack.core.security.cloud.CloudCredentialClientHelper;
+import org.elasticsearch.xpack.core.security.cloud.InternalCloudApiKeyService;
 import org.elasticsearch.xpack.core.transform.transforms.SettingsConfig;
 import org.elasticsearch.xpack.core.transform.transforms.SourceConfig;
 import org.elasticsearch.xpack.core.transform.transforms.TransformEffectiveSettings;
@@ -116,6 +119,8 @@ public final class SchemaUtil {
         final SettingsConfig settingsConfig,
         final PivotConfig pivotConfig,
         final SourceConfig sourceConfig,
+        final InternalCloudApiKeyService cloudApiKeyService,
+        final CloudCredential cloudCredential,
         final ActionListener<Map<String, String>> listener
     ) {
         // collects the fieldnames used as source for aggregations
@@ -164,6 +169,8 @@ public final class SchemaUtil {
             headers,
             sourceConfig,
             allFieldNames.values().stream().filter(Objects::nonNull).toArray(String[]::new),
+            cloudApiKeyService,
+            cloudCredential,
             ActionListener.wrap(
                 sourceMappings -> listener.onResponse(
                     resolveMappings(
@@ -285,6 +292,8 @@ public final class SchemaUtil {
         Map<String, String> headers,
         SourceConfig sourceConfig,
         String[] fields,
+        InternalCloudApiKeyService cloudApiKeyService,
+        CloudCredential cloudCredential,
         ActionListener<Map<String, String>> listener
     ) {
         String[] index = sourceConfig.getIndex();
@@ -297,12 +306,14 @@ public final class SchemaUtil {
             .fields(fields)
             .runtimeFields(sourceConfig.getRuntimeMappings())
             .indicesOptions(sourceConfig.indicesOptions());
-        ClientHelper.executeWithHeadersAsync(
+        CloudCredentialClientHelper.executeWithHeadersAsync(
             headers,
             ClientHelper.TRANSFORM_ORIGIN,
             client,
             TransportFieldCapabilitiesAction.TYPE,
             fieldCapabilitiesRequest,
+            cloudApiKeyService,
+            cloudCredential,
             ActionListener.wrap(response -> listener.onResponse(extractFieldMappings(response)), listener::onFailure)
         );
     }

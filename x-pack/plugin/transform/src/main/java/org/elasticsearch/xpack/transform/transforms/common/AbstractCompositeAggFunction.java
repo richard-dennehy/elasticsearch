@@ -27,6 +27,9 @@ import org.elasticsearch.search.aggregations.bucket.composite.CompositeAggregati
 import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.elasticsearch.xpack.core.ClientHelper;
 import org.elasticsearch.xpack.core.ml.utils.ExceptionsHelper;
+import org.elasticsearch.xpack.core.security.cloud.CloudCredential;
+import org.elasticsearch.xpack.core.security.cloud.CloudCredentialClientHelper;
+import org.elasticsearch.xpack.core.security.cloud.InternalCloudApiKeyService;
 import org.elasticsearch.xpack.core.transform.TransformField;
 import org.elasticsearch.xpack.core.transform.transforms.SourceConfig;
 import org.elasticsearch.xpack.core.transform.transforms.TransformIndexerStats;
@@ -120,15 +123,19 @@ public abstract class AbstractCompositeAggFunction implements Function {
         Map<String, String> headers,
         SourceConfig sourceConfig,
         TimeValue timeout,
+        InternalCloudApiKeyService cloudApiKeyService,
+        CloudCredential cloudCredential,
         ActionListener<Boolean> listener
     ) {
         SearchRequest searchRequest = buildSearchRequestForValidation("validate", sourceConfig, timeout, TEST_QUERY_PAGE_SIZE);
-        ClientHelper.executeWithHeadersAsync(
+        CloudCredentialClientHelper.executeWithHeadersAsync(
             headers,
             ClientHelper.TRANSFORM_ORIGIN,
             client,
             TransportSearchAction.TYPE,
             searchRequest,
+            cloudApiKeyService,
+            cloudCredential,
             ActionListener.wrap(response -> {
                 if (response == null) {
                     listener.onFailure(new ValidationException().addValidationError("Unexpected null response from test query"));

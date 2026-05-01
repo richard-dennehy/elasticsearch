@@ -16,6 +16,8 @@ import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.core.Tuple;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
+import org.elasticsearch.xpack.core.security.cloud.CloudCredential;
+import org.elasticsearch.xpack.core.security.cloud.InternalCloudApiKeyService;
 import org.elasticsearch.xpack.core.transform.transforms.SourceConfig;
 import org.elasticsearch.xpack.core.transform.transforms.TransformCheckpoint;
 import org.elasticsearch.xpack.core.transform.transforms.TransformIndexerStats;
@@ -116,17 +118,21 @@ public interface Function {
     /**
      * Deduce mappings based on the input mappings and the known configuration.
      *
-     * @param client a client instance for querying the source mappings
-     * @param headers headers to be used to query only for what the caller is allowed to
-     * @param transformId transform id
-     * @param sourceConfig the source configuration
-     * @param listener listener to take the deduced mapping
+     * @param client             a client instance for querying the source mappings
+     * @param headers            headers to be used to query only for what the caller is allowed to
+     * @param transformId        transform id
+     * @param sourceConfig       the source configuration
+     * @param cloudApiKeyService
+     * @param cloudCredential
+     * @param listener           listener to take the deduced mapping
      */
     void deduceMappings(
         Client client,
         Map<String, String> headers,
         String transformId,
         SourceConfig sourceConfig,
+        InternalCloudApiKeyService cloudApiKeyService,
+        CloudCredential cloudCredential,
         ActionListener<Map<String, String>> listener
     );
 
@@ -185,17 +191,21 @@ public interface Function {
     /**
      * Runtime validation by querying the source and checking if source and config fit.
      *
-     * @param client a client instance for querying the source
-     * @param headers headers to be used to query only for what the caller is allowed to
-     * @param sourceConfig the source configuration
-     * @param timeout search query timeout
-     * @param listener the result listener
+     * @param client             a client instance for querying the source
+     * @param headers            headers to be used to query only for what the caller is allowed to
+     * @param sourceConfig       the source configuration
+     * @param timeout            search query timeout
+     * @param cloudApiKeyService
+     * @param cloudCredential
+     * @param listener           the result listener
      */
     void validateQuery(
         Client client,
         Map<String, String> headers,
         SourceConfig sourceConfig,
         @Nullable TimeValue timeout,
+        InternalCloudApiKeyService cloudApiKeyService,
+        CloudCredential cloudCredential,
         ActionListener<Boolean> listener
     );
 

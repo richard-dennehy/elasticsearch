@@ -35,6 +35,7 @@ import org.elasticsearch.tasks.Task;
 import org.elasticsearch.tasks.TaskId;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.elasticsearch.transport.TransportService;
+import org.elasticsearch.xpack.core.security.cloud.InternalCloudApiKeyService;
 import org.elasticsearch.xpack.core.transform.action.GetTransformStatsAction;
 import org.elasticsearch.xpack.core.transform.action.GetTransformStatsAction.Request;
 import org.elasticsearch.xpack.core.transform.action.GetTransformStatsAction.Response;
@@ -72,6 +73,7 @@ public class TransportGetTransformStatsAction extends TransportTasksAction<Trans
     private final TransformCheckpointService transformCheckpointService;
     private final Client client;
     private final Settings nodeSettings;
+    private final InternalCloudApiKeyService cloudApiKeyService;
 
     @Inject
     public TransportGetTransformStatsAction(
@@ -96,6 +98,7 @@ public class TransportGetTransformStatsAction extends TransportTasksAction<Trans
         this.transformCheckpointService = transformServices.checkpointService();
         this.client = client;
         this.nodeSettings = settings;
+        this.cloudApiKeyService = transformServices.cloudApiKeyService();
     }
 
     @Override

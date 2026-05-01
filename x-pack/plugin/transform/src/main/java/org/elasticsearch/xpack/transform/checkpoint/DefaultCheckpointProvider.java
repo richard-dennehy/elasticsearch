@@ -20,6 +20,8 @@ import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.transport.RemoteClusterService;
 import org.elasticsearch.xpack.core.ClientHelper;
+import org.elasticsearch.xpack.core.security.cloud.CloudCredentialClientHelper;
+import org.elasticsearch.xpack.core.security.cloud.InternalCloudApiKeyService;
 import org.elasticsearch.xpack.core.transform.action.GetCheckpointAction;
 import org.elasticsearch.xpack.core.transform.transforms.TransformCheckpoint;
 import org.elasticsearch.xpack.core.transform.transforms.TransformCheckpointingInfo;
@@ -60,6 +62,7 @@ class DefaultCheckpointProvider implements CheckpointProvider {
     protected final TransformConfigManager transformConfigManager;
     protected final TransformAuditor transformAuditor;
     protected final TransformConfig transformConfig;
+    protected final InternalCloudApiKeyService cloudApiKeyService;
 
     DefaultCheckpointProvider(
         final Clock clock,
@@ -67,7 +70,8 @@ class DefaultCheckpointProvider implements CheckpointProvider {
         final RemoteClusterResolver remoteClusterResolver,
         final TransformConfigManager transformConfigManager,
         final TransformAuditor transformAuditor,
-        final TransformConfig transformConfig
+        final TransformConfig transformConfig,
+        final InternalCloudApiKeyService cloudApiKeyService
     ) {
         this.clock = clock;
         this.client = client;
@@ -75,6 +79,7 @@ class DefaultCheckpointProvider implements CheckpointProvider {
         this.transformConfigManager = transformConfigManager;
         this.transformAuditor = transformAuditor;
         this.transformConfig = transformConfig;
+        this.cloudApiKeyService = cloudApiKeyService;
     }
 
     @Override
@@ -212,12 +217,14 @@ class DefaultCheckpointProvider implements CheckpointProvider {
             );
         }
 
-        ClientHelper.executeWithHeadersAsync(
+        CloudCredentialClientHelper.executeWithHeadersAsync(
             threadContext,
             headers,
             ClientHelper.TRANSFORM_ORIGIN,
             getCheckpointRequest,
             checkpointListener,
+            cloudApiKeyService,
+            transformConfig.getCloudManagedCredential(),
             client::getCheckpoint
         );
     }

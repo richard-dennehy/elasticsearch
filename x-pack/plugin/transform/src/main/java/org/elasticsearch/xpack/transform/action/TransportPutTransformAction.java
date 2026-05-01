@@ -36,6 +36,9 @@ import org.elasticsearch.xpack.core.ClientHelper;
 import org.elasticsearch.xpack.core.XPackPlugin;
 import org.elasticsearch.xpack.core.XPackSettings;
 import org.elasticsearch.xpack.core.security.SecurityContext;
+import org.elasticsearch.xpack.core.security.authc.AuthenticationField;
+import org.elasticsearch.xpack.core.security.cloud.CloudCredential;
+import org.elasticsearch.xpack.core.security.cloud.InternalCloudApiKeyService;
 import org.elasticsearch.xpack.core.transform.TransformConfigVersion;
 import org.elasticsearch.xpack.core.transform.TransformMessages;
 import org.elasticsearch.xpack.core.transform.TransformMetadata;
@@ -52,6 +55,7 @@ import org.elasticsearch.xpack.transform.persistence.TransformConfigManager;
 import org.elasticsearch.xpack.transform.transforms.FunctionFactory;
 
 import java.time.Instant;
+import java.util.Map;
 import java.util.function.BooleanSupplier;
 
 import static org.elasticsearch.xpack.transform.utils.SecondaryAuthorizationUtils.getSecurityHeadersPreferringSecondary;
@@ -64,6 +68,7 @@ public class TransportPutTransformAction extends AcknowledgedTransportMasterNode
     private final IndexNameExpressionResolver indexNameExpressionResolver;
     private final Client client;
     private final TransformConfigManager transformConfigManager;
+    private final InternalCloudApiKeyService cloudApiKeyService;
     private final SecurityContext securityContext;
     private final TransformAuditor auditor;
     private final TransformConfigAutoMigration transformConfigAutoMigration;
@@ -96,6 +101,7 @@ public class TransportPutTransformAction extends AcknowledgedTransportMasterNode
         this.indexNameExpressionResolver = indexNameExpressionResolver;
         this.client = client;
         this.transformConfigManager = transformServices.configManager();
+        this.cloudApiKeyService = transformServices.cloudApiKeyService();
         this.securityContext = XPackSettings.SECURITY_ENABLED.get(settings)
             ? new SecurityContext(settings, threadPool.getThreadContext())
             : null;
@@ -131,10 +137,30 @@ public class TransportPutTransformAction extends AcknowledgedTransportMasterNode
             return;
         }
 
-        // <3> Create the transform
-        ActionListener<ValidateTransformAction.Response> validateTransformListener = listener.delegateFailureAndWrap(
-            (l, unused) -> putTransform(request, l)
-        );
+        logger.warn("extracting UIAM credentials");
+        logger.warn(cloudApiKeyService.getClass().getSimpleName());
+        var cloudManagedCredential = cloudApiKeyService.extractCloudManagedCredential(threadPool.getThreadContext());
+        config.setCloudManagedCredential(cloudManagedCredential);
+
+        // <3> Grant a dedicated CPS API key (if cross-project) then create the transform
+        ActionListener<ValidateTransformAction.Response> validateTransformListener = listener.delegateFailureAndWrap((l, unused) -> {
+            if (cloudManagedCredential != null) {
+                cloudApiKeyService.grantCloudAuthentication(
+                    threadPool.getThreadContext(),
+                    cloudManagedCredential,
+                    transformId,
+                    l.delegateFailureAndWrap((ll, grantResult) -> {
+                        config.setCloudManagedCredential(grantResult.credential());
+                        logger.warn("Granted credential {}", config.getCloudManagedCredential());
+                        var headers = Map.of(AuthenticationField.AUTHENTICATION_KEY, grantResult.authentication().encode());
+                        config.setHeaders(ClientHelper.getPersistableSafeSecurityHeaders(headers, clusterState));
+                        putTransform(request, ll);
+                    })
+                );
+            } else {
+                putTransform(request, l);
+            }
+        });
 
         // <2> Validate source and destination indices
 

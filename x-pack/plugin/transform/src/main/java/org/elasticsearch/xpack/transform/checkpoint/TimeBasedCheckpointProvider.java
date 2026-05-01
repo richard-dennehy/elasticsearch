@@ -18,6 +18,8 @@ import org.elasticsearch.index.query.BoolQueryBuilder;
 import org.elasticsearch.index.query.RangeQueryBuilder;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.elasticsearch.xpack.core.ClientHelper;
+import org.elasticsearch.xpack.core.security.cloud.CloudCredentialClientHelper;
+import org.elasticsearch.xpack.core.security.cloud.InternalCloudApiKeyService;
 import org.elasticsearch.xpack.core.transform.TransformConfigVersion;
 import org.elasticsearch.xpack.core.transform.transforms.TimeSyncConfig;
 import org.elasticsearch.xpack.core.transform.transforms.TransformCheckpoint;
@@ -50,9 +52,10 @@ class TimeBasedCheckpointProvider extends DefaultCheckpointProvider {
         final RemoteClusterResolver remoteClusterResolver,
         final TransformConfigManager transformConfigManager,
         final TransformAuditor transformAuditor,
-        final TransformConfig transformConfig
+        final TransformConfig transformConfig,
+        final InternalCloudApiKeyService cloudApiKeyService
     ) {
-        super(clock, client, remoteClusterResolver, transformConfigManager, transformAuditor, transformConfig);
+        super(clock, client, remoteClusterResolver, transformConfigManager, transformAuditor, transformConfig, cloudApiKeyService);
         timeSyncConfig = (TimeSyncConfig) transformConfig.getSyncConfig();
         alignTimestamp = createAlignTimestampFunction(transformConfig);
     }
@@ -79,12 +82,14 @@ class TimeBasedCheckpointProvider extends DefaultCheckpointProvider {
 
         logger.trace("query for changes based on time: {}", sourceBuilder);
 
-        ClientHelper.executeWithHeadersAsync(
+        CloudCredentialClientHelper.executeWithHeadersAsync(
             transformConfig.getHeaders(),
             ClientHelper.TRANSFORM_ORIGIN,
             client,
             TransportSearchAction.TYPE,
             searchRequest,
+            cloudApiKeyService,
+            transformConfig.getCloudManagedCredential(),
             ActionListener.wrap(r -> listener.onResponse(r.getHits().getTotalHits().value() > 0L), listener::onFailure)
         );
     }

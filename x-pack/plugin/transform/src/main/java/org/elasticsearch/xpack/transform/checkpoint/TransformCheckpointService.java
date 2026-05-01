@@ -14,6 +14,7 @@ import org.elasticsearch.client.internal.ParentTaskAssigningClient;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.transport.LinkedProjectConfigService;
+import org.elasticsearch.xpack.core.security.cloud.InternalCloudApiKeyService;
 import org.elasticsearch.xpack.core.transform.transforms.TimeSyncConfig;
 import org.elasticsearch.xpack.core.transform.transforms.TransformCheckpointStats;
 import org.elasticsearch.xpack.core.transform.transforms.TransformCheckpointingInfo;
@@ -42,6 +43,7 @@ public class TransformCheckpointService {
     private final Clock clock;
     private final TransformConfigManager transformConfigManager;
     private final TransformAuditor transformAuditor;
+    private final InternalCloudApiKeyService cloudApiKeyService;
     private final RemoteClusterResolver remoteClusterResolver;
 
     public TransformCheckpointService(
@@ -49,11 +51,13 @@ public class TransformCheckpointService {
         final Settings settings,
         LinkedProjectConfigService linkedProjectConfigService,
         final TransformConfigManager transformConfigManager,
-        TransformAuditor transformAuditor
+        TransformAuditor transformAuditor,
+        InternalCloudApiKeyService cloudApiKeyService
     ) {
         this.clock = clock;
         this.transformConfigManager = transformConfigManager;
         this.transformAuditor = transformAuditor;
+        this.cloudApiKeyService = cloudApiKeyService;
         this.remoteClusterResolver = new RemoteClusterResolver(settings, linkedProjectConfigService);
     }
 
@@ -65,7 +69,8 @@ public class TransformCheckpointService {
                 remoteClusterResolver,
                 transformConfigManager,
                 transformAuditor,
-                transformConfig
+                transformConfig,
+                cloudApiKeyService
             );
         }
 
@@ -75,7 +80,8 @@ public class TransformCheckpointService {
             remoteClusterResolver,
             transformConfigManager,
             transformAuditor,
-            transformConfig
+            transformConfig,
+            cloudApiKeyService
         );
     }
 

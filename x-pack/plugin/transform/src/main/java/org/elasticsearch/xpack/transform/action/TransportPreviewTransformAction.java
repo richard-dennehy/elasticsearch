@@ -44,6 +44,7 @@ import org.elasticsearch.xcontent.XContentType;
 import org.elasticsearch.xpack.core.XPackSettings;
 import org.elasticsearch.xpack.core.common.validation.SourceDestValidator;
 import org.elasticsearch.xpack.core.security.SecurityContext;
+import org.elasticsearch.xpack.core.security.cloud.InternalCloudApiKeyService;
 import org.elasticsearch.xpack.core.transform.TransformField;
 import org.elasticsearch.xpack.core.transform.action.PreviewTransformAction;
 import org.elasticsearch.xpack.core.transform.action.PreviewTransformAction.Request;
@@ -86,6 +87,7 @@ public class TransportPreviewTransformAction extends HandledTransportAction<Requ
     private final SourceDestValidator sourceDestValidator;
     private final Settings destIndexSettings;
     private final BooleanSupplier hasLinkedProjects;
+    private final InternalCloudApiKeyService cloudApiKeyService;
 
     @Inject
     public TransportPreviewTransformAction(
@@ -102,6 +104,7 @@ public class TransportPreviewTransformAction extends HandledTransportAction<Requ
         ProjectResolver projectResolver
     ) {
         super(PreviewTransformAction.NAME, transportService, actionFilters, Request::new, EsExecutors.DIRECT_EXECUTOR_SERVICE);
+        this.cloudApiKeyService = transformServices.cloudApiKeyService();
         this.securityContext = XPackSettings.SECURITY_ENABLED.get(settings)
             ? new SecurityContext(settings, threadPool.getThreadContext())
             : null;
@@ -273,7 +276,7 @@ public class TransportPreviewTransformAction extends HandledTransportAction<Requ
             );
         });
 
-        function.deduceMappings(parentTaskClient, filteredHeaders, transformId, source, deduceMappingsListener);
+        function.deduceMappings(parentTaskClient, filteredHeaders, transformId, source, cloudApiKeyService, null, deduceMappingsListener);
     }
 
     @SuppressWarnings("unchecked")
